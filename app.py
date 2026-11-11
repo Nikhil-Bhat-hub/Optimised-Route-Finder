@@ -1,142 +1,229 @@
-"""Streamlit UI for the Optimised Route Finder."""
+"""Modern Streamlit interface for the Bengaluru Optimised Route Finder."""
 from __future__ import annotations
 
-import os
-import time
-import networkx as nx
-import osmnx as ox
-import pandas as pd
-import plotly.express as px
-import streamlit as st
 import folium
+import pandas as pd
+import streamlit as st
 from streamlit_folium import st_folium
+from dotenv import load_dotenv
 
-from algorithms.astar import astar_path
-from algorithms.bfs import bfs_path
-from algorithms.dfs import dfs_path
-from algorithms.dijkstra import dijkstra_path
-from backend.map_data import load_graph, nearest_node, route_coordinates, route_metrics
-from database.database import init_db, save_route, get_recent_routes
+from route_finder.graph import haversine_km
+from route_finder.osm import demo_bengaluru_graph, load_bengaluru_graph
+from route_finder.storage import RouteHistory
 
-st.set_page_config(page_title="Optimised Route Finder", page_icon="🗺️", layout="wide")
-DEFAULT_PLACE = os.getenv("ROUTE_PLACE", "Bengaluru, Karnataka, India")
-GRAPH_PATH = os.getenv("GRAPH_PATH", "data/bengaluru.graphml")
-
-@st.cache_resource(show_spinner="Loading the road network…")
-def get_road_graph():
-    return load_graph(place=DEFAULT_PLACE, graph_path=GRAPH_PATH)
+load_dotenv()
 
 
-def make_map(graph, routes, selected):
-    fmap = folium.Map(location=[12.9716, 77.5946], zoom_start=12, control_scale=True)
-    palette = {"Dijkstra": "blue", "A*": "green", "BFS": "purple", "DFS": "orange"}
-    first_coords = None
-    for name, path in routes.items():
-        coords = route_coordinates(graph, path)
-        if not coords:
-            continue
-        first_coords = first_coords or coords
-        folium.PolyLine(coords, color=palette.get(name, "blue"), weight=7 if name == selected else 4,
-                        opacity=0.9 if name == selected else 0.55, tooltip=name).add_to(fmap)
-    if first_coords:
-        folium.Marker(first_coords[0], tooltip="Start", icon=folium.Icon(color="darkgreen", icon="play")).add_to(fmap)
-        folium.Marker(first_coords[-1], tooltip="Destination", icon=folium.Icon(color="red", icon="flag")).add_to(fmap)
-    return fmap
+st.set_page_config(
+    page_title="Routewise · Bengaluru",
+    page_icon="🧭",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700;800&display=swap');
+:root { --ink:#172b36; --muted:#70818a; --teal:#087e79; --teal-dark:#08645f; --mint:#e5f4ef; --paper:#f5f7f6; --line:#e3e9e7; }
+.stApp { background:var(--paper); color:var(--ink); font-family:'DM Sans',sans-serif; }
+header[data-testid="stHeader"] { background:rgba(245,247,246,.94); }
+section[data-testid="stSidebar"] { background:#fff; border-right:1px solid var(--line); }
+section[data-testid="stSidebar"] > div { padding-top:1.5rem; }
+.block-container { max-width:1500px; padding-top:1.6rem; padding-bottom:3rem; }
+h1,h2,h3 { font-family:'Manrope',sans-serif !important; color:var(--ink) !important; letter-spacing:-.035em; }
+h1 { font-size:2.7rem !important; font-weight:800 !important; }
+h2 { font-size:1.55rem !important; font-weight:750 !important; }
+p, label, span { font-family:'DM Sans',sans-serif; }
+.brand { color:var(--teal); font-size:.82rem; letter-spacing:.14em; text-transform:uppercase; font-weight:700; }
+.hero { background:linear-gradient(118deg,#123b43 0%,#0a6c68 65%,#118e7e 100%); border-radius:24px; padding:32px 36px; color:white; margin:.55rem 0 1.25rem; box-shadow:0 16px 42px rgba(17,73,72,.15); }
+.hero h1 { color:white !important; margin:.35rem 0 .45rem; }
+.hero p { color:#d5eeeb; margin:0; font-size:1rem; }
+.hero-tag { display:inline-block; background:rgba(255,255,255,.14); border:1px solid rgba(255,255,255,.2); border-radius:999px; padding:6px 11px; color:#e6fbf5; font-size:.76rem; font-weight:700; letter-spacing:.04em; }
+.panel { background:#fff; border:1px solid var(--line); border-radius:20px; padding:22px 24px; box-shadow:0 5px 20px rgba(26,54,62,.035); }
+.section-kicker { color:var(--teal); text-transform:uppercase; letter-spacing:.12em; font-weight:700; font-size:.72rem; margin-bottom:4px; }
+.route-title { color:#20343c; font-family:'Manrope',sans-serif; font-weight:750; font-size:1.22rem; }
+.caption { color:var(--muted); font-size:.91rem; }
+.status-pill { display:inline-flex; align-items:center; gap:7px; border-radius:99px; padding:7px 11px; font-size:.78rem; font-weight:700; }
+.status-live { background:#e5f4eb; color:#236b44; }
+.status-demo { background:#fff3dd; color:#8b5c08; }
+div[data-testid="stMetric"] { background:#fff; border:1px solid var(--line); border-radius:16px; padding:14px 16px; }
+div[data-testid="stMetricLabel"] { color:#74848a; }
+div[data-testid="stMetricValue"] { color:var(--ink); font-family:'Manrope',sans-serif; }
+div.stButton > button[kind="primary"] { background:var(--teal); border:0; border-radius:12px; min-height:3rem; font-weight:700; box-shadow:0 7px 17px rgba(8,126,121,.17); }
+div.stButton > button[kind="primary"]:hover { background:var(--teal-dark); border:0; }
+div.stButton > button { border-radius:11px; }
+[data-testid="stDataFrame"] { border:1px solid var(--line); border-radius:14px; overflow:hidden; }
+div[data-testid="stAlert"] { border-radius:14px; }
+footer { visibility:hidden; }
+@media(max-width:800px) { .hero { padding:25px 22px; border-radius:18px; } h1 { font-size:2.05rem !important; } .block-container { padding-left:1rem; padding-right:1rem; } }
+</style>
+""", unsafe_allow_html=True)
 
 
-init_db()
-st.title("🗺️ Optimised Route Finder")
-st.caption("Compare graph algorithms on real OpenStreetMap road networks.")
+@st.cache_resource(ttl=900, show_spinner="Preparing Bengaluru road network…")
+def get_network():
+    try:
+        return load_bengaluru_graph(), "live", None
+    except Exception as exc:
+        return demo_bengaluru_graph(), "demo", str(exc)
+
+
+if st.sidebar.button("↻  Retry live road data", use_container_width=True):
+    get_network.clear()
+    st.session_state.pop("routes", None)
+    st.session_state.pop("route_pair", None)
+    st.rerun()
+
+graph, network_mode, network_error = get_network()
+LANDMARKS = {
+    "Majestic": (12.9767, 77.5713),
+    "Cubbon Park": (12.9763, 77.5929),
+    "MG Road": (12.9756, 77.6066),
+    "Bangalore Palace": (12.9987, 77.5928),
+    "Lalbagh": (12.9507, 77.5848),
+    "Koramangala": (12.9352, 77.6245),
+    "Indiranagar": (12.9784, 77.6408),
+    "Whitefield": (12.9698, 77.7500),
+}
+places = sorted(LANDMARKS)
+if network_mode == "demo":
+    place_nodes = {name: name for name in places}
+else:
+    place_nodes = {
+        name: min(graph.coordinates, key=lambda node: haversine_km(LANDMARKS[name], graph.coordinates[node]))
+        for name in places
+    }
+
+st.markdown('<div class="brand">ROUTEWISE&nbsp;&nbsp; / &nbsp;&nbsp;BENGALURU</div>', unsafe_allow_html=True)
+st.markdown("""
+<div class="hero">
+  <span class="hero-tag">CITY ROUTING, MADE CLEAR</span>
+  <h1>Find your better route.</h1>
+  <p>Compare distance and estimated drive time across four classic pathfinding algorithms.</p>
+</div>
+""", unsafe_allow_html=True)
+
+pill_class = "status-live" if network_mode == "live" else "status-demo"
+pill_text = "LIVE OPENSTREETMAP NETWORK" if network_mode == "live" else "DEMO NETWORK · LIVE MAP UNAVAILABLE"
+st.markdown(f'<span class="status-pill {pill_class}">● &nbsp;{pill_text}</span>', unsafe_allow_html=True)
+if network_mode == "demo":
+    st.info("The public OpenStreetMap service is busy, so the app has switched to a small Bengaluru demo network. You can still explore route comparisons. Use **Retry live road data** in the sidebar to try again. Demo distances are illustrative.")
+    if network_error:
+        with st.expander("Connection details"):
+            st.code(network_error[:700])
+
+
 with st.sidebar:
-    st.header("Route settings")
-    optimization = st.radio("Optimize for", ["Shortest distance", "Fastest estimated time"])
-    algorithms_selected = st.multiselect("Algorithms", ["Dijkstra", "A*", "BFS", "DFS"], default=["Dijkstra", "A*"])
-    st.divider()
-    st.caption(f"Road network: {DEFAULT_PLACE}")
-    st.caption("Estimated travel time is based on road speed metadata, not live traffic.")
+    st.markdown("### Plan a route")
+    st.caption("Choose two Bengaluru locations and the goal for your trip.")
+    source = st.selectbox("FROM", places, index=0)
+    destination_options = [place for place in places if place != source] or places
+    target = st.selectbox("TO", destination_options, index=min(2, len(destination_options)-1))
+    metric = st.radio("OPTIMISE FOR", ["Distance", "Travel time"], horizontal=True)
+    metric_key = "time" if metric == "Travel time" else "distance"
+    find_route = st.button("Find my route  →", type="primary", use_container_width=True)
+    st.markdown("---")
+    st.caption("**Algorithms**")
+    st.caption("Dijkstra · A* · BFS · DFS")
+    st.caption("Estimated drive times use road speed metadata when available.")
 
-try:
-    graph = get_road_graph()
-except Exception as exc:
-    st.error(f"Could not load the road network: {exc}")
-    st.info("Check internet access and run `python scripts/download_graph.py` first.")
-    st.stop()
 
-with st.form("route_form"):
-    c1, c2 = st.columns(2)
-    start_text = c1.text_input("Starting location", "Indian Institute of Science, Bengaluru")
-    end_text = c2.text_input("Destination", "Cubbon Park, Bengaluru")
-    submitted = st.form_submit_button("Find optimized routes", type="primary", use_container_width=True)
+if find_route:
+    found = []
+    source_node, target_node = place_nodes[source], place_nodes[target]
+    for method in ("dijkstra", "astar", "bfs", "dfs"):
+        route = (getattr(graph, method)(source_node, target_node, metric_key)
+                 if method in ("dijkstra", "astar")
+                 else getattr(graph, method)(source_node, target_node))
+        if route:
+            RouteHistory().save(source, target, metric_key, route)
+            found.append(route)
+    st.session_state["routes"] = found
+    st.session_state["route_pair"] = (source, target)
+    st.session_state["route_metric"] = metric_key
 
-if submitted:
-    if not algorithms_selected:
-        st.warning("Select at least one algorithm.")
+routes = st.session_state.get("routes", [])
+route_pair = st.session_state.get("route_pair")
+route_matches_selection = (
+    route_pair == (source, target)
+    and st.session_state.get("route_metric") == metric_key
+)
+shown_routes = routes if route_matches_selection else []
+
+if shown_routes:
+    best = next((route for route in shown_routes if route.algorithm == "Dijkstra"), shown_routes[0])
+    metric_cols = st.columns(4)
+    metric_cols[0].metric("BEST DISTANCE" if metric_key == "distance" else "FASTEST ROUTE", f"{best.distance_km:.1f} km")
+    metric_cols[1].metric("EST. DRIVE TIME", f"{best.duration_min:.0f} min")
+    metric_cols[2].metric("ROAD SEGMENTS", f"{len(best.nodes)-1}")
+    metric_cols[3].metric("ALGORITHMS", f"{len(shown_routes)}")
+
+
+left, right = st.columns([.82, 1.45], gap="large")
+with left:
+    st.markdown('<div class="section-kicker">ROUTE OPTIONS</div>', unsafe_allow_html=True)
+    st.markdown("## Compare paths")
+    st.markdown('<div class="caption">Each search finds a path; BFS and DFS are unweighted and may not minimise distance or time.</div>', unsafe_allow_html=True)
+    if shown_routes:
+        table = [{
+            "Algorithm": route.algorithm,
+            "Distance": f"{route.distance_km:.2f} km",
+            "Drive time": f"{route.duration_min:.0f} min",
+            "Search": f"{route.elapsed_ms:.2f} ms",
+            "Segments": len(route.nodes)-1,
+        } for route in shown_routes]
+        st.dataframe(table, use_container_width=True, hide_index=True)
+        st.markdown(f'<div class="panel"><div class="section-kicker">RECOMMENDED</div><div class="route-title">{best.algorithm} · {best.distance_km:.1f} km</div><div class="caption">About {best.duration_min:.0f} minutes · {len(best.nodes)-1} road segments</div></div>', unsafe_allow_html=True)
     else:
-        try:
-            with st.spinner("Looking up locations and calculating routes…"):
-                start_lat, start_lon = ox.geocode(start_text)
-                end_lat, end_lon = ox.geocode(end_text)
-                source = nearest_node(graph, start_lat, start_lon)
-                target = nearest_node(graph, end_lat, end_lon)
-                weight = "length" if optimization == "Shortest distance" else "travel_time"
-                solvers = {
-                    "Dijkstra": lambda: dijkstra_path(graph, source, target, weight),
-                    "A*": lambda: astar_path(graph, source, target, weight),
-                    "BFS": lambda: bfs_path(graph, source, target),
-                    "DFS": lambda: dfs_path(graph, source, target),
-                }
-                routes, rows = {}, []
-                for name in algorithms_selected:
-                    started = time.perf_counter()
-                    try:
-                        path, explored = solvers[name]()
-                        elapsed = (time.perf_counter() - started) * 1000
-                        routes[name] = path
-                        metrics = route_metrics(graph, path)
-                        rows.append({"Algorithm": name, "Distance (km)": metrics["distance_m"] / 1000,
-                                     "Estimated time (min)": metrics["travel_time_s"] / 60,
-                                     "Nodes in path": len(path), "Nodes explored": explored,
-                                     "Execution time (ms)": elapsed,
-                                     "Optimality": "Optimal for selected weights" if name in ("Dijkstra", "A*") else "Not guaranteed"})
-                    except (nx.NetworkXNoPath, nx.NodeNotFound, ValueError) as err:
-                        st.warning(f"{name}: no route found ({err})")
-                if routes:
-                    df = pd.DataFrame(rows)
-                    sort_col = "Distance (km)" if weight == "length" else "Estimated time (min)"
-                    selected = df.sort_values(sort_col).iloc[0]["Algorithm"]
-                    st.session_state.update(routes=routes, route_rows=rows, selected_route=selected)
-                    chosen = next(row for row in rows if row["Algorithm"] == selected)
-                    save_route(start_text, end_text, optimization, selected, chosen["Distance (km)"], chosen["Estimated time (min)"], chosen["Execution time (ms)"])
-                else:
-                    st.error("No route could be found for the selected algorithms.")
-        except Exception as exc:
-            st.error(f"Route calculation failed: {exc}")
-            st.caption("Location lookup requires access to OpenStreetMap Nominatim.")
+        st.markdown('<div class="panel"><div class="section-kicker">READY WHEN YOU ARE</div><div class="route-title">Your route comparison will appear here.</div><div class="caption">Pick your start and destination in the sidebar, then select Find my route.</div></div>', unsafe_allow_html=True)
 
-if "routes" in st.session_state:
-    route_names = list(st.session_state.routes)
-    selected = st.selectbox("Highlight route", route_names, index=route_names.index(st.session_state.selected_route))
-    st.session_state.selected_route = selected
-    row = next(r for r in st.session_state.route_rows if r["Algorithm"] == selected)
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Distance", f"{row['Distance (km)']:.2f} km")
-    m2.metric("Estimated time", f"{row['Estimated time (min)']:.1f} min")
-    m3.metric("Nodes explored", f"{row['Nodes explored']:,}")
-    st.subheader("Route map")
-    st_folium(make_map(graph, st.session_state.routes, selected), use_container_width=True, height=540)
-    st.subheader("Algorithm comparison")
-    df = pd.DataFrame(st.session_state.route_rows)
-    st.dataframe(df.round(3), use_container_width=True, hide_index=True)
-    a, b = st.columns(2)
-    a.plotly_chart(px.bar(df, x="Algorithm", y="Execution time (ms)", title="Execution time"), use_container_width=True)
-    b.plotly_chart(px.bar(df, x="Algorithm", y="Nodes explored", title="Nodes explored"), use_container_width=True)
-    st.info("BFS and DFS are unweighted traversal baselines. They do not guarantee the shortest-distance or fastest route.")
+with right:
+    st.markdown('<div class="section-kicker">CITY MAP</div>', unsafe_allow_html=True)
+    st.markdown("## Bengaluru, on the map")
+    route_for_map = best if shown_routes else None
+    if route_for_map:
+        coordinates = [graph.coordinates[node] for node in route_for_map.nodes]
+        center = coordinates[len(coordinates)//2]
+    else:
+        coordinates = []
+        center = (12.9716, 77.5946)
+    city_map = folium.Map(location=center, zoom_start=12, tiles="CartoDB positron", control_scale=True)
+    if route_for_map:
+        folium.PolyLine(coordinates, color="#087e79", weight=6, opacity=.9,
+                        tooltip=f"{route_for_map.algorithm} · {route_for_map.distance_km:.1f} km").add_to(city_map)
+        folium.Marker(coordinates[0], tooltip=f"Start · {source}",
+                      icon=folium.Icon(color="green", icon="play", prefix="fa")).add_to(city_map)
+        folium.Marker(coordinates[-1], tooltip=f"Destination · {target}",
+                      icon=folium.Icon(color="red", icon="flag", prefix="fa")).add_to(city_map)
+        city_map.fit_bounds(coordinates, padding=(30, 30))
+    else:
+        folium.CircleMarker(center, radius=8, color="#087e79", fill=True,
+                            tooltip="Bengaluru").add_to(city_map)
+    st_folium(city_map, height=520, use_container_width=True, returned_objects=[])
+    st.caption("Map data © OpenStreetMap contributors · Routes show the selected road network path.")
 
-with st.expander("Recent route searches"):
-    history = get_recent_routes()
+
+st.markdown("---")
+history = RouteHistory().recent(50)
+analytics, recent_searches = st.columns([1, 1], gap="large")
+with analytics:
+    st.markdown('<div class="section-kicker">PERFORMANCE</div>', unsafe_allow_html=True)
+    st.markdown("## Search speed")
     if history:
-        st.dataframe(pd.DataFrame(history, columns=["ID", "From", "To", "Optimization", "Algorithm", "Distance (km)", "Time (min)", "Execution (ms)", "Created"]), use_container_width=True, hide_index=True)
+        frame = pd.DataFrame(history)
+        average = frame.groupby("algorithm")["elapsed_ms"].mean().sort_values()
+        st.bar_chart(average, y_label="Average search time (ms)")
     else:
-        st.caption("No routes saved yet.")
-st.divider()
-st.caption("© OpenStreetMap contributors. Travel times are estimates, not live traffic predictions.")
+        st.caption("Search performance will appear after your first route.")
+with recent_searches:
+    st.markdown('<div class="section-kicker">YOUR ACTIVITY</div>', unsafe_allow_html=True)
+    st.markdown("## Recent searches")
+    if history:
+        st.dataframe([{
+            "From": row["source"], "To": row["target"], "Algorithm": row["algorithm"],
+            "Distance": f'{row["distance_km"]:.1f} km', "Time": f'{row["duration_min"]:.0f} min',
+        } for row in history[:8]], use_container_width=True, hide_index=True)
+    else:
+        st.caption("Your saved route searches will show up here.")
+
+st.markdown("<div style='text-align:center;color:#8a989d;font-size:.8rem;padding:2rem 0 0'>ROUTEWISE · BUILT FOR BENGALURU</div>", unsafe_allow_html=True)
