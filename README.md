@@ -10,6 +10,7 @@ A Bengaluru road routing project that compares Dijkstra, A*, breadth-first searc
 - Route metrics include distance, estimated duration, search runtime, and segment count. Search history is stored in `data/routes.db`.
 - Modern Streamlit UI with landmark-based route selection, interactive map, performance chart, and saved search history.
 - A clearly labeled schematic Bengaluru demo network keeps the interface usable when the public Overpass service is unavailable. Choose **Retry live road data** in the sidebar to retry.
+- A no-key OSRM route API provides a live road route, distance, and ETA even while Overpass is unavailable. The local algorithms remain available for graph comparisons.
 
 ## Setup
 
@@ -20,9 +21,9 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-The first application run downloads the Bengaluru driving network from OpenStreetMap and may take a few minutes. Internet access is needed for that initial download; subsequent runs use the cache. The public Overpass servers can be busy; when that happens, the app retries and then switches to a small illustrative landmark network until you retry the live data.
+The first application run downloads the Bengaluru driving network from OpenStreetMap and may take a few minutes. Internet access is needed for that initial download; subsequent runs use the cache. The public Overpass servers can be busy; when that happens, the app retries and then switches to a small illustrative landmark network until you retry the live data. Route requests use the public OSRM demo server, which needs no API key. Results are cached for 15 minutes, and calls are throttled to one per second per app process. The demo server is limited to reasonable non-commercial use and has no uptime or latency guarantee. For commercial use or sustained public traffic, configure your own compatible OSRM server.
 
-Optional settings can be copied from `.env.example` to `.env`. `ROUTE_PLACE`, `GRAPH_PATH`, and `DATABASE_PATH` control the map area, GraphML cache location, and SQLite history file.
+Optional settings can be copied from `.env.example` to `.env`. `ROUTE_PLACE`, `GRAPH_PATH`, and `DATABASE_PATH` control the map area, GraphML cache location, and SQLite history file. `OSRM_BASE_URL` optionally points the live route integration at another OSRM-compatible server; it defaults to `https://router.project-osrm.org`.
 
 ## Run
 
@@ -31,7 +32,7 @@ streamlit run app.py
 uvicorn api:app --reload
 ```
 
-API: `GET /health`, `POST /routes` with `{"source":"node id","target":"node id","metric":"distance"}` or `"time"`, and `GET /history?limit=50`. API route endpoints accept OSM node IDs; the Streamlit UI lets users choose named landmarks and snaps them to nearby road nodes. The network loader uses OSMnx's simplified drive graph and a 30 km/h fallback speed if the OSM network lacks speed tags.
+API: `GET /health`, `POST /routes` with `{"source":"node id","target":"node id","metric":"distance"}` or `"time"`, and `GET /history?limit=50`. API route endpoints accept OSM node IDs; the Streamlit UI lets users choose named landmarks and snaps them to nearby road nodes. The network loader uses OSMnx's simplified drive graph and a 30 km/h fallback speed if the OSM network lacks speed tags. The OSRM route is an external baseline; algorithm comparisons are performed against the selected graph and may be illustrative while the app is in demo mode. Route results and map data use OpenStreetMap contributors; see the attribution in the app.
 
 ## Tests
 

@@ -1,6 +1,8 @@
 """Modern Streamlit interface for the Bengaluru Optimised Route Finder."""
 from __future__ import annotations
 
+import os
+
 import folium
 import pandas as pd
 import streamlit as st
@@ -9,6 +11,7 @@ from dotenv import load_dotenv
 
 from route_finder.graph import haversine_km
 from route_finder.osm import demo_bengaluru_graph, load_bengaluru_graph
+from route_finder.osrm_client import OSRMRouteError, fetch_osrm_route
 from route_finder.storage import RouteHistory
 
 load_dotenv()
@@ -68,10 +71,18 @@ def get_network():
         return demo_bengaluru_graph(), "demo", str(exc)
 
 
+@st.cache_data(ttl=900, max_entries=128, show_spinner=False)
+def get_live_route(start: tuple[float, float], end: tuple[float, float], service_url: str):
+    """Cache public routing calls so reruns and repeat searches do not hit OSRM."""
+    return fetch_osrm_route(start, end, service_url)
+
+
 if st.sidebar.button("↻  Retry live road data", use_container_width=True):
     get_network.clear()
     st.session_state.pop("routes", None)
     st.session_state.pop("route_pair", None)
+    st.session_state.pop("osrm_route", None)
+    st.session_state.pop("osrm_error", None)
     st.rerun()
 
 graph, network_mode, network_error = get_network()
@@ -104,10 +115,10 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 pill_class = "status-live" if network_mode == "live" else "status-demo"
-pill_text = "LIVE OPENSTREETMAP NETWORK" if network_mode == "live" else "DEMO NETWORK · LIVE MAP UNAVAILABLE"
+pill_text = "LIVE OPENSTREETMAP NETWORK" if network_mode == "live" else "DEMO ALGORITHMS · LIVE OSRM ROUTING"
 st.markdown(f'<span class="status-pill {pill_class}">● &nbsp;{pill_text}</span>', unsafe_allow_html=True)
 if network_mode == "demo":
-    st.info("The public OpenStreetMap service is busy, so the app has switched to a small Bengaluru demo network. You can still explore route comparisons. Use **Retry live road data** in the sidebar to try again. Demo distances are illustrative.")
+    st.info("The public OpenStreetMap road graph is unavailable, so algorithm comparisons are using an illustrative Bengaluru network. Live road routing is still available through OSRM when its demo service responds. Use **Retry live road data** in the sidebar to reload the graph.")
     if network_error:
         with st.expander("Connection details"):
             st.code(network_error[:700])
@@ -141,6 +152,15 @@ if find_route:
     st.session_state["routes"] = found
     st.session_state["route_pair"] = (source, target)
     st.session_state["route_metric"] = metric_key
+    try:
+        service_url = os.getenv("OSRM_BASE_URL", "https://router.project-osrm.org")
+        st.session_state["osrm_route"] = get_live_route(
+            LANDMARKS[source], LANDMARKS[target], service_url
+        )
+        st.session_state["osrm_error"] = None
+    except OSRMRouteError as exc:
+        st.session_state["osrm_route"] = None
+        st.session_state["osrm_error"] = str(exc)
 
 routes = st.session_state.get("routes", [])
 route_pair = st.session_state.get("route_pair")
@@ -149,6 +169,16 @@ route_matches_selection = (
     and st.session_state.get("route_metric") == metric_key
 )
 shown_routes = routes if route_matches_selection else []
+shown_osrm_route = (
+    st.session_state.get("osrm_route")
+    if route_pair == (source, target)
+    else None
+)
+osrm_error = (
+    st.session_state.get("osrm_error")
+    if route_pair == (source, target)
+    else None
+)
 
 if shown_routes:
     best = next((route for route in shown_routes if route.algorithm == "Dijkstra"), shown_routes[0])
@@ -157,6 +187,22 @@ if shown_routes:
     metric_cols[1].metric("EST. DRIVE TIME", f"{best.duration_min:.0f} min")
     metric_cols[2].metric("ROAD SEGMENTS", f"{len(best.nodes)-1}")
     metric_cols[3].metric("ALGORITHMS", f"{len(shown_routes)}")
+
+if shown_osrm_route:
+    live_cols = st.columns([1, 1, 2])
+    live_cols[0].metric("LIVE ROAD DISTANCE", f'{shown_osrm_route["distance_km"]:.1f} km')
+    live_cols[1].metric("OSRM DRIVE ESTIMATE", f'{shown_osrm_route["duration_min"]:.0f} min')
+    live_cols[2].caption(
+        "Live road route from the free OSRM demo service. Its distance and ETA are "
+        "an external baseline; the algorithm comparison above uses the selected graph."
+    )
+    if network_mode == "demo" and shown_routes:
+        st.info(
+            "The live OSRM route uses real road data. The Dijkstra, A*, BFS, and DFS "
+            "comparison is running on the illustrative demo network while Overpass is unavailable."
+        )
+elif osrm_error:
+    st.warning(f"Live road routing is temporarily unavailable. {osrm_error} The local route comparison is still available.")
 
 
 left, right = st.columns([.82, 1.45], gap="large")
@@ -180,8 +226,11 @@ with left:
 with right:
     st.markdown('<div class="section-kicker">CITY MAP</div>', unsafe_allow_html=True)
     st.markdown("## Bengaluru, on the map")
-    route_for_map = best if shown_routes else None
-    if route_for_map:
+    route_for_map = best if shown_routes and network_mode == "live" else None
+    live_coordinates = shown_osrm_route["coordinates"] if shown_osrm_route else []
+    if live_coordinates:
+        center = live_coordinates[len(live_coordinates)//2]
+    elif route_for_map:
         coordinates = [graph.coordinates[node] for node in route_for_map.nodes]
         center = coordinates[len(coordinates)//2]
     else:
@@ -189,18 +238,34 @@ with right:
         center = (12.9716, 77.5946)
     city_map = folium.Map(location=center, zoom_start=12, tiles="CartoDB positron", control_scale=True)
     if route_for_map:
-        folium.PolyLine(coordinates, color="#087e79", weight=6, opacity=.9,
+        folium.PolyLine(coordinates, color="#e58c36", weight=5, opacity=.82,
+                        dash_array="8, 8",
                         tooltip=f"{route_for_map.algorithm} · {route_for_map.distance_km:.1f} km").add_to(city_map)
-        folium.Marker(coordinates[0], tooltip=f"Start · {source}",
+    if live_coordinates:
+        folium.PolyLine(
+            live_coordinates,
+            color="#087e79",
+            weight=6,
+            opacity=.92,
+            tooltip=(
+                f"OSRM · {shown_osrm_route['distance_km']:.1f} km · "
+                f"{shown_osrm_route['duration_min']:.0f} min"
+            ),
+        ).add_to(city_map)
+    if route_for_map or live_coordinates:
+        start_point = live_coordinates[0] if live_coordinates else coordinates[0]
+        end_point = live_coordinates[-1] if live_coordinates else coordinates[-1]
+        folium.Marker(start_point, tooltip=f"Start · {source}",
                       icon=folium.Icon(color="green", icon="play", prefix="fa")).add_to(city_map)
-        folium.Marker(coordinates[-1], tooltip=f"Destination · {target}",
+        folium.Marker(end_point, tooltip=f"Destination · {target}",
                       icon=folium.Icon(color="red", icon="flag", prefix="fa")).add_to(city_map)
-        city_map.fit_bounds(coordinates, padding=(30, 30))
+        all_coordinates = list(live_coordinates) + (coordinates if route_for_map else [])
+        city_map.fit_bounds(all_coordinates, padding=(30, 30))
     else:
         folium.CircleMarker(center, radius=8, color="#087e79", fill=True,
                             tooltip="Bengaluru").add_to(city_map)
     st_folium(city_map, height=520, use_container_width=True, returned_objects=[])
-    st.caption("Map data © OpenStreetMap contributors · Routes show the selected road network path.")
+    st.caption("Map data © OpenStreetMap contributors · Teal shows the live OSRM route; dashed amber shows the selected algorithm path when live road-network data is loaded.")
 
 
 st.markdown("---")
@@ -226,4 +291,4 @@ with recent_searches:
     else:
         st.caption("Your saved route searches will show up here.")
 
-st.markdown("<div style='text-align:center;color:#8a989d;font-size:.8rem;padding:2rem 0 0'>ROUTEWISE · BUILT FOR BENGALURU</div>", unsafe_allow_html=True)
+st.markdown("<div style='text-align:center;color:#8a989d;font-size:.8rem;padding:2rem 0 0'>ROUTEWISE · BUILT FOR BENGALURU · ROUTING BY OSRM · MAP DATA © OPENSTREETMAP CONTRIBUTORS</div>", unsafe_allow_html=True)
