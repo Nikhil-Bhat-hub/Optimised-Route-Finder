@@ -227,14 +227,13 @@ with right:
     st.markdown('<div class="section-kicker">CITY MAP</div>', unsafe_allow_html=True)
     st.markdown("## Bengaluru, on the map")
     route_for_map = best if shown_routes and network_mode == "live" else None
+    coordinates = [graph.coordinates[node] for node in route_for_map.nodes] if route_for_map else []
     live_coordinates = shown_osrm_route["coordinates"] if shown_osrm_route else []
     if live_coordinates:
         center = live_coordinates[len(live_coordinates)//2]
-    elif route_for_map:
-        coordinates = [graph.coordinates[node] for node in route_for_map.nodes]
+    elif coordinates:
         center = coordinates[len(coordinates)//2]
     else:
-        coordinates = []
         center = (12.9716, 77.5946)
     city_map = folium.Map(location=center, zoom_start=12, tiles="CartoDB positron", control_scale=True)
     if route_for_map:
