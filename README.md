@@ -11,6 +11,7 @@ A Bengaluru road routing project that compares Dijkstra, A*, breadth-first searc
 - Modern Streamlit UI with landmark-based route selection, interactive map, performance chart, and saved search history.
 - A clearly labeled schematic Bengaluru demo network keeps the interface usable when the public Overpass service is unavailable. Choose **Retry live road data** in the sidebar to retry.
 - A no-key OSRM route API provides a live road route, distance, and ETA even while Overpass is unavailable. The local algorithms remain available for graph comparisons.
+- The map uses OpenStreetMap's keyless raster tiles with attribution; follow the tile usage policy and use a dedicated provider or host tiles yourself for sustained public traffic.
 
 ## Setup
 

@@ -235,7 +235,7 @@ with right:
         center = coordinates[len(coordinates)//2]
     else:
         center = (12.9716, 77.5946)
-    city_map = folium.Map(location=center, zoom_start=12, tiles="CartoDB positron", control_scale=True)
+    city_map = folium.Map(location=center, zoom_start=12, tiles="OpenStreetMap", control_scale=True)
     if route_for_map:
         folium.PolyLine(coordinates, color="#e58c36", weight=5, opacity=.82,
                         dash_array="8, 8",
