@@ -1,0 +1,2 @@
+For reproducible deployment, generate a platform-specific lock file after creating a clean virtual environment:
+python -m pip freeze > requirements-lock.txt
