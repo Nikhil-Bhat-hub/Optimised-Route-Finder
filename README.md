@@ -54,7 +54,7 @@ python -m pip install -r requirements-graph-build.txt
 python scripts/build_compact_graph.py
 ~~~
 
-GitHub Actions can run the builder from **Actions → Build Bengaluru compact road graph → Run workflow**. The workflow checks the size, commits the graph when it changes, and the Render service auto-deploys from main. Overpass availability can affect a build. If the graph is missing, place search and OSRM routes remain available, while graph comparison and playback report that the graph is unavailable.
+GitHub Actions can run the builder from **Actions → Build Bengaluru compact road graph → Run workflow**. The builder tries the Private.coffee Overpass instance first, then the default Overpass instance, and accepts a comma-separated `OVERPASS_URLS` override for other endpoints. The workflow checks the size, commits the graph when it changes, and the Render service auto-deploys from main. Public Overpass capacity can still affect a build. If the graph is missing, place search and OSRM routes remain available, while graph comparison and playback report that the graph is unavailable.
 
 ### Run the Streamlit explorer
 

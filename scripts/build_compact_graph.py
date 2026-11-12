@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -14,6 +15,10 @@ from route_finder.compact_graph import save_compact_graph
 from route_finder.graph import RoadGraph
 
 BENGALURU_BBOX = (77.40, 12.72, 77.86, 13.18)  # west, south, east, north
+DEFAULT_OVERPASS_URLS = (
+    "https://overpass.private.coffee/api",
+    "https://overpass-api.de/api",
+)
 MAJOR_ROAD_FILTER = (
     '["highway"~"motorway|motorway_link|trunk|trunk_link|primary|primary_link|'
     'secondary|secondary_link|tertiary|tertiary_link|unclassified|residential"]'
@@ -23,15 +28,39 @@ MAJOR_ROAD_FILTER = (
 def build(output_path: Path) -> tuple[int, int, int]:
     ox.settings.use_cache = True
     ox.settings.overpass_rate_limit = True
-    ox.settings.requests_timeout = 180
-    road_network = ox.graph.graph_from_bbox(
-        BENGALURU_BBOX,
-        network_type="drive",
-        simplify=True,
-        retain_all=False,
-        truncate_by_edge=True,
-        custom_filter=MAJOR_ROAD_FILTER,
-    )
+    ox.settings.requests_timeout = 300
+    configured_urls = os.getenv("OVERPASS_URLS", "").strip()
+    overpass_urls = tuple(
+        url.strip().rstrip("/")
+        for url in configured_urls.split(",")
+        if url.strip()
+    ) or DEFAULT_OVERPASS_URLS
+    errors: list[str] = []
+    road_network = None
+    for endpoint in overpass_urls:
+        ox.settings.overpass_url = endpoint
+        print(f"Requesting Bengaluru road data from {endpoint}...", flush=True)
+        try:
+            road_network = ox.graph.graph_from_bbox(
+                BENGALURU_BBOX,
+                network_type="drive",
+                simplify=True,
+                retain_all=False,
+                truncate_by_edge=True,
+                custom_filter=MAJOR_ROAD_FILTER,
+            )
+            break
+        except Exception as exc:
+            errors.append(f"{endpoint}: {exc}")
+            print(
+                f"Overpass endpoint failed; trying the next configured endpoint. ({exc})",
+                file=sys.stderr,
+                flush=True,
+            )
+    if road_network is None:
+        raise RuntimeError(
+            "All configured Overpass endpoints failed: " + " | ".join(errors)
+        )
     road_network = ox.routing.add_edge_speeds(road_network)
     graph = RoadGraph()
     for node_id, data in road_network.nodes(data=True):
