@@ -16,6 +16,7 @@ from route_finder.graph import RoadGraph
 
 BENGALURU_BBOX = (77.40, 12.72, 77.86, 13.18)  # west, south, east, north
 DEFAULT_OVERPASS_URLS = (
+    "https://maps.mail.ru/osm/tools/overpass/api",
     "https://overpass.private.coffee/api",
     "https://overpass-api.de/api",
 )
@@ -39,6 +40,11 @@ def build(output_path: Path) -> tuple[int, int, int]:
     road_network = None
     for endpoint in overpass_urls:
         ox.settings.overpass_url = endpoint
+        # The VK Maps instance explicitly permits unrestricted requests and does
+        # not need OSMnx's slot-management probe before sending a query.
+        ox.settings.overpass_rate_limit = not endpoint.startswith(
+            "https://maps.mail.ru/osm/tools/overpass/api"
+        )
         print(f"Requesting Bengaluru road data from {endpoint}...", flush=True)
         try:
             road_network = ox.graph.graph_from_bbox(
