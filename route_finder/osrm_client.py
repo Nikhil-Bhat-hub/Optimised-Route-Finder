@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import asyncio
 import threading
 import time
 from typing import Any
@@ -12,7 +13,9 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from .traffic import (
+    FLOOD_RISK_POINTS,
     RouteTrafficAnalysis,
+    analyze_flood_risk,
     analyze_route_traffic,
     compute_avoidance_waypoint,
 )
@@ -21,6 +24,8 @@ DEFAULT_OSRM_URL = "https://router.project-osrm.org"
 _REQUEST_INTERVAL_SECONDS = 1.05
 _request_lock = threading.Lock()
 _last_request_started = 0.0
+_async_request_lock = asyncio.Lock()
+_async_last_request_started = 0.0
 
 
 class OSRMRouteError(RuntimeError):
@@ -362,3 +367,206 @@ def _route_instructions(legs: list[dict[str, Any]]) -> list[dict[str, float | st
                 "duration_min": float(step.get("duration", 0)) / 60,
             })
     return directions
+
+
+async def async_fetch_osrm_raw_routes(
+    points: list[tuple[float, float]],
+    base_url: str | None = None,
+    alternatives: bool = False,
+) -> list[dict[str, Any]]:
+    """HTTPX async equivalent of fetch_osrm_raw_routes for FastAPI handlers."""
+    if len(points) < 2:
+        raise OSRMRouteError("At least two points are required for routing.")
+    validated = [_validate_coordinate(point) for point in points]
+    service_url = (base_url or os.getenv("OSRM_BASE_URL") or DEFAULT_OSRM_URL).rstrip("/")
+    if not service_url.startswith(("https://", "http://")):
+        raise OSRMRouteError("OSRM_BASE_URL must be an http:// or https:// URL.")
+    try:
+        import httpx
+    except ImportError as exc:
+        raise OSRMRouteError("Install httpx to use the hosted async routing API.") from exc
+
+    global _async_last_request_started
+    async with _async_request_lock:
+        wait = _REQUEST_INTERVAL_SECONDS - (time.monotonic() - _async_last_request_started)
+        if wait > 0:
+            await asyncio.sleep(wait)
+        _async_last_request_started = time.monotonic()
+
+    coords_str = ";".join(f"{lon:.6f},{lat:.6f}" for lat, lon in validated)
+    url = f"{service_url}/route/v1/driving/{coords_str}"
+    params = {
+        "overview": "full",
+        "geometries": "geojson",
+        "alternatives": "true" if alternatives else "false",
+        "steps": "true",
+        "generate_hints": "false",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            response = await client.get(
+                url,
+                params=params,
+                headers={"Accept": "application/json", "User-Agent": "RoutewiseBengaluru/1.0"},
+            )
+            response.raise_for_status()
+            payload = response.json()
+    except httpx.HTTPStatusError as exc:
+        raise OSRMRouteError(f"The routing service returned HTTP {exc.response.status_code}.") from exc
+    except (httpx.RequestError, ValueError) as exc:
+        raise OSRMRouteError("The routing service could not be reached right now.") from exc
+    if not isinstance(payload, dict):
+        raise OSRMRouteError("The routing service returned an invalid response.")
+    if payload.get("code") != "Ok":
+        if payload.get("code") == "NoRoute":
+            raise OSRMRouteError("No drivable route was found between these locations.")
+        raise OSRMRouteError("The routing service could not find a route for these locations.")
+    parsed = []
+    for raw_route in payload.get("routes", []):
+        try:
+            parsed.append(_parse_single_route(raw_route))
+        except OSRMRouteError:
+            continue
+    if not parsed:
+        raise OSRMRouteError("No valid route could be parsed.")
+    return parsed
+
+
+async def async_fetch_osrm_duration_matrix(
+    points: list[tuple[float, float]],
+    base_url: str | None = None,
+) -> list[list[float]]:
+    """Fetch a driving-time matrix for TSP stop ordering with the OSRM Table API."""
+    if not 2 <= len(points) <= 10:
+        raise OSRMRouteError("Route optimization supports 2 to 10 points.")
+    validated = [_validate_coordinate(point) for point in points]
+    service_url = (base_url or os.getenv("OSRM_BASE_URL") or DEFAULT_OSRM_URL).rstrip("/")
+    if not service_url.startswith(("https://", "http://")):
+        raise OSRMRouteError("OSRM_BASE_URL must be an http:// or https:// URL.")
+    try:
+        import httpx
+    except ImportError as exc:
+        raise OSRMRouteError("Install httpx to use the hosted async routing API.") from exc
+    coords_str = ";".join(f"{lon:.6f},{lat:.6f}" for lat, lon in validated)
+    global _async_last_request_started
+    async with _async_request_lock:
+        wait = _REQUEST_INTERVAL_SECONDS - (time.monotonic() - _async_last_request_started)
+        if wait > 0:
+            await asyncio.sleep(wait)
+        _async_last_request_started = time.monotonic()
+    try:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            response = await client.get(
+                f"{service_url}/table/v1/driving/{coords_str}",
+                params={"annotations": "duration"},
+                headers={"Accept": "application/json", "User-Agent": "RoutewiseBengaluru/1.0"},
+            )
+            response.raise_for_status()
+            payload = response.json()
+    except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as exc:
+        raise OSRMRouteError("The routing service could not create a stop-time matrix.") from exc
+    matrix = payload.get("durations") if isinstance(payload, dict) else None
+    if not isinstance(matrix, list) or len(matrix) != len(points):
+        raise OSRMRouteError("The routing service returned an incomplete stop-time matrix.")
+    try:
+        converted = [[float(value) / 60 for value in row] for row in matrix]
+    except (TypeError, ValueError) as exc:
+        raise OSRMRouteError("The routing service returned invalid stop durations.") from exc
+    if any(not math.isfinite(value) or value < 0 for row in converted for value in row):
+        raise OSRMRouteError("The routing service returned unreachable stops.")
+    return converted
+
+
+async def async_fetch_dual_traffic_routes(
+    points: list[tuple[float, float]],
+    traffic_mode: str = "normal",
+    base_url: str | None = None,
+    avoid_flood: bool = False,
+) -> dict[str, Any]:
+    """Plan a multi-stop route asynchronously and label modelled conditions honestly."""
+    if len(points) < 2:
+        raise OSRMRouteError("At least two points are required for routing.")
+    points = [_validate_coordinate(point) for point in points]
+    candidates = await async_fetch_osrm_raw_routes(points, base_url=base_url, alternatives=True)
+
+    def decorate(route: dict[str, Any], mode: str) -> tuple[dict[str, Any], RouteTrafficAnalysis]:
+        analysis = analyze_route_traffic(route["coordinates"], route["duration_min"], mode=mode)  # type: ignore[arg-type]
+        return ({
+            **route,
+            "free_flow_min": analysis.free_flow_min,
+            "duration_min": analysis.duration_with_traffic_min,
+            "traffic_delay_min": analysis.traffic_delay_min,
+            "congestion_level": analysis.congestion_level,
+            "hotspots_detected": analysis.hotspots_detected,
+            "route_type": "route",
+        }, analysis)
+
+    primary, primary_analysis = decorate(candidates[0], traffic_mode)
+    options: list[tuple[dict[str, Any], RouteTrafficAnalysis, list[dict[str, Any]]]] = []
+    for raw in candidates:
+        route, analysis = decorate(raw, traffic_mode)
+        rain_risks = analyze_flood_risk(route["coordinates"])
+        options.append((route, analysis, rain_risks))
+
+    # If the selected route crosses a static monsoon caution point, try a public
+    # routing-engine alternative that preserves all waypoint stops.
+    if avoid_flood and options[0][2]:
+        risky_point = options[0][2][0]
+        detour = compute_avoidance_waypoint(points[0], points[-1], risky_point)
+        try:
+            detour_candidates = await async_fetch_osrm_raw_routes(
+                [points[0], detour, *points[1:]], base_url=base_url, alternatives=False
+            )
+            route, analysis = decorate(detour_candidates[0], traffic_mode)
+            risks = analyze_flood_risk(route["coordinates"])
+            if not risks or len(risks) < len(options[0][2]):
+                options.append((route, analysis, risks))
+        except OSRMRouteError:
+            pass
+
+    selected = min(
+        options,
+        key=lambda entry: (len(entry[2]) if avoid_flood else 0, entry[1].duration_with_traffic_min),
+    )
+    fastest_route = {
+        **selected[0],
+        "route_type": "fastest",
+        "label": "Recommended route",
+        "rain_risks": selected[2],
+    }
+
+    primary_rain = options[0][2]
+    traffic_route, traffic_analysis = primary, primary_analysis
+    if traffic_mode != "peak" and primary_analysis.traffic_delay_min < 2:
+        traffic_route, traffic_analysis = decorate(candidates[0], "peak")
+        traffic_route["label"] = "Peak-hour model"
+    else:
+        traffic_route["label"] = "Selected traffic model"
+    traffic_route = {**traffic_route, "route_type": "traffic", "rain_risks": primary_rain}
+
+    hotspots = []
+    seen = set()
+    for route in (traffic_route, fastest_route):
+        for hotspot in route.get("hotspots_detected", []):
+            if hotspot["id"] not in seen:
+                seen.add(hotspot["id"])
+                hotspots.append(hotspot)
+    has_reroute = selected[0] is not options[0][0]
+    time_saved = max(0, round(traffic_route["duration_min"] - fastest_route["duration_min"], 1))
+    return {
+        "route": fastest_route,
+        "fastest_route": fastest_route,
+        "traffic_route": traffic_route,
+        "has_traffic_reroute": has_reroute,
+        "time_saved_min": time_saved,
+        "reroute_reason": (
+            "An available route avoided a modeled hotspot or static rain-risk area."
+            if has_reroute
+            else "Times use an OpenStreetMap road route and a modeled congestion estimate."
+        ),
+        "traffic_mode": traffic_mode,
+        "traffic_hotspots": hotspots,
+        "rain_mode": avoid_flood,
+        "rain_risks": primary_rain,
+        "estimate_notice": "Traffic and rain-risk conditions are planning estimates, not live sensor feeds.",
+    }

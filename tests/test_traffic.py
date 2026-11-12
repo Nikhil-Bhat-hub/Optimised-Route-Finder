@@ -1,7 +1,9 @@
 import pytest
 from route_finder.traffic import (
     BENGALURU_TRAFFIC_HOTSPOTS,
+    FLOOD_RISK_POINTS,
     TrafficHotspot,
+    analyze_flood_risk,
     analyze_route_traffic,
     compute_avoidance_waypoint,
 )
@@ -96,3 +98,14 @@ def test_dual_traffic_routes_structure(monkeypatch):
     assert "has_traffic_reroute" in result
     assert "time_saved_min" in result
     assert "traffic_hotspots" in result
+
+
+def test_static_rain_risk_detection_is_labeled_by_location():
+    risk = FLOOD_RISK_POINTS[0]
+    route = [
+        (risk["lat"] - 0.004, risk["lon"] - 0.005),
+        (risk["lat"] + 0.004, risk["lon"] + 0.005),
+    ]
+    detected = analyze_flood_risk(route)
+    assert detected
+    assert detected[0]["id"] == risk["id"]

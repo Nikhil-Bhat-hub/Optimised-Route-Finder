@@ -1,4 +1,4 @@
-"""Modern Streamlit interface for the Bengaluru Optimised Route Finder with live traffic analysis."""
+"""Streamlit explorer for Bengaluru route planning and modeled traffic scenarios."""
 from __future__ import annotations
 
 import os
@@ -19,7 +19,7 @@ load_dotenv()
 
 
 st.set_page_config(
-    page_title="Routewise · Bengaluru (Traffic Aware)",
+    page_title="Routewise · Bengaluru route planner",
     page_icon="🧭",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -109,17 +109,17 @@ else:
 st.markdown('<div class="brand">ROUTEWISE&nbsp;&nbsp; / &nbsp;&nbsp;BENGALURU</div>', unsafe_allow_html=True)
 st.markdown("""
 <div class="hero">
-  <span class="hero-tag">TRAFFIC-AWARE INTELLIGENT ROUTING</span>
+  <span class="hero-tag">BENGALURU ROUTING · MODELED TRAFFIC SCENARIOS</span>
   <h1>Find your fastest route.</h1>
   <p>Detect road congestion bottlenecks, automatically calculate bypass routes, and compare classic algorithms.</p>
 </div>
 """, unsafe_allow_html=True)
 
 pill_class = "status-live" if network_mode == "live" else "status-demo"
-pill_text = "LIVE OSM NETWORK & TRAFFIC MONITOR" if network_mode == "live" else "DEMO ALGORITHMS · LIVE OSRM & TRAFFIC"
+pill_text = "OPENSTREETMAP ROAD GRAPH · TRAFFIC ESTIMATES" if network_mode == "live" else "DEMO GRAPH · OSRM ROUTES · TRAFFIC ESTIMATES"
 st.markdown(f'<span class="status-pill {pill_class}">● &nbsp;{pill_text}</span>', unsafe_allow_html=True)
 if network_mode == "demo":
-    st.info("Algorithm comparisons are using an illustrative Bengaluru network. Live road routing & traffic analysis remain active through OSRM.")
+    st.info("Algorithm comparisons are using an illustrative Bengaluru network. OSRM road routes remain available; congestion values are modeled estimates, not a live traffic feed.")
 
 with st.sidebar:
     st.markdown("### Plan a route")
@@ -133,8 +133,8 @@ with st.sidebar:
     metric_key = "time" if metric == "Travel time" else "distance"
     find_route = st.button("Find best routes  →", type="primary", use_container_width=True)
     st.markdown("---")
-    st.caption("**Monitored Bottlenecks**")
-    st.caption(f"{len(BENGALURU_TRAFFIC_HOTSPOTS)} active choke points (Silk Board, Ecospace ORR, Tin Factory, Hebbal, etc.)")
+    st.caption("**Modeled Hotspots**")
+    st.caption(f"{len(BENGALURU_TRAFFIC_HOTSPOTS)} modeled congestion locations (Silk Board, Ecospace ORR, Tin Factory, Hebbal, etc.)")
 
 
 if find_route:
@@ -185,7 +185,7 @@ if traffic_data:
     if traffic_data.get("has_traffic_reroute"):
         st.markdown(f"""
         <div class="traffic-alert">
-          <strong>⚡ Dynamic Traffic Rerouting Active:</strong> {traffic_data['reroute_reason']}
+          <strong>⚡ Suggested route alternative:</strong> {traffic_data['reroute_reason']}
         </div>
         """, unsafe_allow_html=True)
 
@@ -218,7 +218,7 @@ with left:
 
 with right:
     st.markdown('<div class="section-kicker">CITY MAP</div>', unsafe_allow_html=True)
-    st.markdown("## Bengaluru, live route & traffic view")
+    st.markdown("## Bengaluru route comparison")
     center = (12.9716, 77.5946)
     if traffic_data:
         coords = traffic_data["fastest_route"]["coordinates"]
@@ -264,7 +264,7 @@ with right:
         folium.CircleMarker(center, radius=8, color="#087e79", fill=True, tooltip="Bengaluru").add_to(city_map)
 
     st_folium(city_map, height=520, use_container_width=True, returned_objects=[])
-    st.caption("Map data © OpenStreetMap contributors · Solid green: fastest route avoiding traffic · Dashed red: route with traffic choke points.")
+    st.caption("Map data © OpenStreetMap contributors · Route durations and congestion scenarios are estimates, not live traffic observations.")
 
 st.markdown("---")
 history = RouteHistory().recent(50)
@@ -289,4 +289,4 @@ with recent_searches:
     else:
         st.caption("Your saved route searches will show up here.")
 
-st.markdown("<div style='text-align:center;color:#8a989d;font-size:.8rem;padding:2rem 0 0'>ROUTEWISE · BUILT FOR BENGALURU · ROUTING & TRAFFIC BY OSRM · MAP DATA © OPENSTREETMAP CONTRIBUTORS</div>", unsafe_allow_html=True)
+st.markdown("<div style='text-align:center;color:#8a989d;font-size:.8rem;padding:2rem 0 0'>ROUTEWISE · BUILT FOR BENGALURU · ROUTING BY OSRM · TRAFFIC SCENARIOS MODELED · MAP DATA © OPENSTREETMAP CONTRIBUTORS</div>", unsafe_allow_html=True)

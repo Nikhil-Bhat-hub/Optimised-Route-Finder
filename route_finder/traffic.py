@@ -9,6 +9,34 @@ from .graph import haversine_km
 
 TrafficMode = Literal["normal", "peak", "offpeak"]
 
+# Static planning cautions requested for monsoon mode. These are not a live flood feed.
+FLOOD_RISK_POINTS: list[dict[str, Any]] = [
+    {
+        "id": "ecospace-underpass",
+        "name": "Ecospace underpass",
+        "lat": 12.9267,
+        "lon": 77.6765,
+        "radius_km": 0.45,
+        "description": "Static monsoon caution area; verify local conditions before travel.",
+    },
+    {
+        "id": "windsor-manor-underpass",
+        "name": "Windsor Manor underpass",
+        "lat": 12.9845,
+        "lon": 77.5908,
+        "radius_km": 0.4,
+        "description": "Static monsoon caution area; verify local conditions before travel.",
+    },
+    {
+        "id": "hebbal-underpass",
+        "name": "Hebbal underpass",
+        "lat": 13.0400,
+        "lon": 77.5930,
+        "radius_km": 0.5,
+        "description": "Static monsoon caution area; verify local conditions before travel.",
+    },
+]
+
 
 @dataclass(frozen=True)
 class TrafficHotspot:
@@ -138,12 +166,33 @@ class RouteTrafficAnalysis:
 
 
 def get_mode_factor(mode: TrafficMode) -> float:
-    """Multiplier based on time of day / traffic mode."""
+    """Modeled multiplier; this is a planning estimate, not a live traffic feed."""
     if mode == "peak":
         return 1.45  # Peak rush hour
     if mode == "offpeak":
         return 0.40  # Late night / Sunday early morning
     return 1.00  # Typical Bengaluru daytime traffic
+
+
+def analyze_flood_risk(
+    coordinates: list[tuple[float, float]],
+    points: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Return static flood-caution areas near a route; never implies current flooding."""
+    if len(coordinates) < 2:
+        return []
+    risks = []
+    for hazard in points if points is not None else FLOOD_RISK_POINTS:
+        closest = min(
+            haversine_km(
+                ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2),
+                (float(hazard["lat"]), float(hazard["lon"])),
+            )
+            for a, b in zip(coordinates, coordinates[1:])
+        )
+        if closest <= float(hazard["radius_km"]):
+            risks.append({**hazard, "distance_km": round(closest, 2)})
+    return risks
 
 
 def analyze_route_traffic(

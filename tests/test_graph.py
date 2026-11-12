@@ -29,3 +29,25 @@ def test_invalid_edge_rejected():
 
 def test_haversine():
     assert haversine_km((0,0),(0,1))==pytest.approx(111.195,rel=0.002)
+
+def test_add_edge_preserves_loaded_coordinates():
+    network = RoadGraph()
+    network.add_node("A", 12.9, 77.5)
+    network.add_node("B", 12.91, 77.51)
+    network.add_edge("A", "B", 1)
+    assert network.coordinates["A"] == (12.9, 77.5)
+    assert network.coordinates["B"] == (12.91, 77.51)
+
+def test_kd_tree_snaps_to_nearest_road_node(graph):
+    graph.add_node("north", 12.98, 77.58)
+    node, distance = graph.nearest_node((12.9799, 77.5801))
+    assert node == "north"
+    assert distance < 0.02
+
+def test_route_records_search_visits_and_edges(graph):
+    result = graph.dijkstra("A", "C")
+    assert result.nodes_explored > 0
+    assert result.visited_order[0] == "A"
+    assert result.visited_order[-1] == "C"
+    assert result.explored_edges
+    assert len(result.visited_order) <= 240

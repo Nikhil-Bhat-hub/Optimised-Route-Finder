@@ -1,0 +1,45 @@
+name: Build Bengaluru compact road graph
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/build_compact_graph.py"
+      - "route_finder/compact_graph.py"
+      - ".github/workflows/build-compact-graph.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: compact-graph-main
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-graph-build.txt
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements-graph-build.txt
+      - run: python scripts/build_compact_graph.py
+      - name: Commit graph when it changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/bengaluru-compact.json.gz
+          if git diff --cached --quiet; then
+            echo "The compact graph is unchanged."
+          else
+            git commit -m "chore: refresh compact Bengaluru road graph"
+            git push origin main
+          fi

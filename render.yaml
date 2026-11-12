@@ -9,6 +9,8 @@ services:
     healthCheckPath: /health
     envVars:
       - key: ENABLE_GRAPH_WARMUP
-        value: "false"
+        value: "true"
+      - key: COMPACT_GRAPH_PATH
+        value: "data/bengaluru-compact.json.gz"
       - key: NOMINATIM_USER_AGENT
         value: "RoutewiseBengaluru/1.0 (https://github.com/Nikhil-Bhat-hub/Optimised-Route-Finder)"

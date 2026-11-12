@@ -10,6 +10,7 @@
     <link rel="preconnect" href="https://tile.openstreetmap.org">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
     <link rel="stylesheet" href="/static/styles.css">
+    <link rel="stylesheet" href="/static/enhancements.css">
   </head>
   <body>
     <header class="topbar">
@@ -18,7 +19,7 @@
         <span>routewise<span class="brand-city"> / Bengaluru</span></span>
       </a>
       <div class="topbar-right">
-        <span class="service-status"><span class="status-dot"></span> Live road routing & traffic</span>
+        <span class="service-status"><span class="status-dot"></span> Road routes · modeled traffic</span>
         <a class="api-link" href="/docs" target="_blank" rel="noreferrer">API docs <span aria-hidden="true">↗</span></a>
       </div>
     </header>
@@ -28,13 +29,14 @@
         <div class="hero-copy">
           <div class="eyebrow"><span class="eyebrow-dot"></span> TRAFFIC-AWARE ROUTE PLANNER · BENGALURU</div>
           <h1>Find your way<br><span>through the city.</span></h1>
-          <p>Choose any two points on the map. Get live road routes, automatic traffic detection, smart bypass rerouting, and algorithm comparisons.</p>
+          <p>Plan Bengaluru trips with OpenStreetMap road routes, modeled traffic scenarios, multi-stop ordering, and a visual pathfinding lab.</p>
         </div>
-        <div class="hero-note"><span class="note-icon">⌖</span><span><strong>Made for Bengaluru</strong><br>Real-time traffic choke point detection & bypass.</span></div>
+        <div class="hero-note"><span class="note-icon">⌖</span><span><strong>Made for Bengaluru</strong><br>Traffic and monsoon conditions are planning estimates.</span></div>
       </section>
 
       <section class="workspace" aria-label="Route planner">
         <aside class="planner-panel">
+          <button id="sheetHandle" class="sheet-handle" type="button" aria-label="Collapse route planner" aria-expanded="true"><span></span></button>
           <div class="panel-heading">
             <div><div class="section-kicker">YOUR JOURNEY</div><h2>Plan a route</h2></div>
             <span class="step-count">01 <i>/</i> 02</span>
@@ -55,6 +57,12 @@
             </div>
           </div>
 
+          <div class="waypoints-block">
+            <div class="waypoints-heading"><span class="field-label">STOPS</span><button id="addStopButton" class="text-button" type="button">+ Add stop</button></div>
+            <div id="waypointsList" class="waypoints-list"></div>
+            <button id="optimizeStopsButton" class="subtle-button" type="button" disabled>↻ Optimize stop order</button>
+          </div>
+
           <div class="search-block">
             <label for="locationSearch" class="field-label">SEARCH A PLACE</label>
             <div class="search-box">
@@ -65,6 +73,8 @@
             <div id="suggestions" class="suggestions" role="listbox" aria-label="Bengaluru places" hidden></div>
           </div>
 
+          <button id="myLocationButton" class="location-button" type="button">◎ Use my current location</button>
+
           <div class="selecting-row">
             <span class="field-label">PLACE NEXT PIN</span>
             <div class="segmented" role="group" aria-label="Choose which route point to place">
@@ -74,13 +84,15 @@
           </div>
 
           <div class="traffic-row">
-            <div><span class="field-label">TRAFFIC CONDITIONS</span><div class="optimize-title">Congestion model</div></div>
+            <div><span class="field-label">TRAFFIC MODEL</span><div class="optimize-title">Estimated conditions</div></div>
             <div class="segmented traffic-toggle" role="group" aria-label="Traffic model">
-              <button class="segment active" data-traffic="normal" aria-pressed="true">Live / Day</button>
-              <button class="segment" data-traffic="peak" aria-pressed="false">Rush Hour</button>
-              <button class="segment" data-traffic="offpeak" aria-pressed="false">Off-Peak</button>
+              <button class="segment active" data-traffic="normal" aria-pressed="true">Typical</button>
+              <button class="segment" data-traffic="peak" aria-pressed="false">Peak</button>
+              <button class="segment" data-traffic="offpeak" aria-pressed="false">Off-peak</button>
             </div>
           </div>
+
+          <label class="rain-toggle"><input id="avoidFloodToggle" type="checkbox"><span><strong>Monsoon caution mode</strong><small>Avoid static flood-risk underpass areas where possible</small></span></label>
 
           <div class="optimize-row">
             <div><span class="field-label">COMPARE ALGORITHMS BY</span><div class="optimize-title">Route metric</div></div>
@@ -113,6 +125,7 @@
             <span><i class="legend-line fastest-line"></i> Fastest Route (Traffic Avoided)</span>
             <span><i class="legend-line traffic-line"></i> Route with Traffic</span>
             <span><i class="legend-hazard">⚠️</i> Choke Point</span>
+            <span><i class="legend-hazard">🌧</i> Static rain-risk area</span>
             <span class="map-source">Map data © OpenStreetMap contributors</span>
           </div>
         </div>
@@ -132,6 +145,7 @@
             <p id="trafficBannerText">Heavy traffic detected on primary corridor. An alternate route was automatically generated.</p>
           </div>
         </div>
+        <p class="estimate-disclaimer">Route times come from OpenStreetMap-based routing. Traffic and monsoon cautions are modeled estimates, not live sensor data.</p>
 
         <!-- Dual Route Cards -->
         <div class="dual-routes-container" id="dualRoutesContainer">
@@ -168,6 +182,7 @@
           <div class="route-summary-card">
             <div class="route-summary-head"><div><h2 id="summaryTitle">Route overview</h2><p id="summarySubtitle">Selected road path</p></div><span class="route-symbol">↗</span></div>
             <div class="metrics"><div class="metric"><span class="metric-value" id="distanceValue">—</span><span class="metric-label">DISTANCE</span></div><div class="metric-divider"></div><div class="metric"><span class="metric-value" id="durationValue">—</span><span class="metric-label">EST. DRIVE</span></div></div>
+            <div class="efficiency-strip"><div><strong id="averageSpeedValue">—</strong><span>EST. AVG SPEED</span></div><div><strong id="delayShareValue">—</strong><span>MODELED DELAY</span></div><div><strong id="stopsValue">—</strong><span>INTERMEDIATE STOPS</span></div></div>
             <div class="trip-points"><div><i class="mini-dot a-dot"></i><span id="summaryStart">Start</span></div><div><i class="mini-dot b-dot"></i><span id="summaryDestination">Destination</span></div></div>
           </div>
           <div class="algorithm-card">
@@ -180,6 +195,36 @@
             <ol id="directionsList" class="directions-list"></ol>
           </div>
         </div>
+
+        <div class="journey-actions">
+          <button id="shareRouteButton" class="subtle-button" type="button">↗ Share route</button>
+          <a id="googleMapsLink" class="subtle-button" href="#" target="_blank" rel="noreferrer">Open in Google Maps ↗</a>
+        </div>
+
+        <div class="insights-grid">
+          <section class="insight-card visualizer-card">
+            <div class="algorithm-header"><div><span class="section-kicker">SEARCH PLAYBACK</span><h2>Watch the graph expand</h2></div><span class="algorithm-icon">⌘</span></div>
+            <p class="insight-copy">Replay sampled road-graph expansions from the selected pathfinding algorithm.</p>
+            <div class="visualizer-controls">
+              <label class="sr-only" for="algorithmSelect">Pathfinding algorithm</label>
+              <select id="algorithmSelect"><option value="Dijkstra">Dijkstra</option><option value="A*">A*</option><option value="BFS">BFS</option><option value="DFS">DFS</option></select>
+              <button id="visualizerPlay" class="subtle-button" type="button" disabled>▶ Play</button>
+              <button id="visualizerReset" class="icon-button" type="button" aria-label="Reset search animation">↺</button>
+            </div>
+            <div class="explored-count"><strong id="exploredCount">0</strong><span>nodes explored</span></div>
+            <p id="visualizerMessage" class="muted-note">Choose a route to load its sampled graph search.</p>
+          </section>
+          <section class="insight-card elevation-card">
+            <div class="algorithm-header"><div><span class="section-kicker">TERRAIN PROFILE</span><h2>Elevation along the route</h2></div><span class="algorithm-icon">⌁</span></div>
+            <canvas id="elevationChart" aria-label="Terrain elevation profile" role="img"></canvas>
+            <p id="elevationNotice" class="muted-note">Terrain elevation is approximate and may differ from road-surface height.</p>
+          </section>
+          <section class="insight-card metro-card">
+            <div class="algorithm-header"><div><span class="section-kicker">PUBLIC TRANSIT</span><h2>Metro comparison</h2></div><span class="algorithm-icon">▤</span></div>
+            <div id="metroEstimate" class="metro-estimate"><span class="muted-note">Choose a route to compare an illustrative Namma Metro estimate.</span></div>
+            <a class="source-link" href="https://english.bmrc.co.in/metro-timings/" target="_blank" rel="noreferrer">Check official BMRCL timings ↗</a>
+          </section>
+        </div>
       </section>
 
       <footer class="footer"><a class="footer-brand" href="/">routewise</a><span>Built for clearer journeys across Bengaluru.</span><span><a href="/docs" target="_blank" rel="noreferrer">FastAPI</a> · OpenStreetMap · OSRM</span></footer>
@@ -187,6 +232,7 @@
 
     <div id="toast" class="toast" role="alert" aria-live="assertive" hidden></div>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.8/dist/chart.umd.min.js" defer></script>
     <script src="/static/app.js" defer></script>
   </body>
 </html>
