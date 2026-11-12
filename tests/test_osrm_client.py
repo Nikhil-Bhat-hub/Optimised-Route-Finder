@@ -27,6 +27,14 @@ def test_fetch_osrm_route_uses_lon_lat_and_converts_geojson(monkeypatch):
             "distance": 1250,
             "duration": 300,
             "geometry": {"type": "LineString", "coordinates": [[77.57, 12.97], [77.60, 12.98]]},
+            "legs": [{"steps": [
+                {"name": "Main Road", "distance": 500, "duration": 60,
+                 "maneuver": {"type": "depart"}},
+                {"name": "Market Street", "distance": 700, "duration": 180,
+                 "maneuver": {"type": "turn", "modifier": "left"}},
+                {"name": "", "distance": 50, "duration": 10,
+                 "maneuver": {"type": "arrive"}},
+            ]}],
         }],
     }
 
@@ -48,6 +56,9 @@ def test_fetch_osrm_route_uses_lon_lat_and_converts_geojson(monkeypatch):
     assert result["distance_km"] == 1.25
     assert result["duration_min"] == 5
     assert result["coordinates"] == [(12.97, 77.57), (12.98, 77.60)]
+    assert result["instructions"][0]["instruction"] == "Head toward Main Road"
+    assert result["instructions"][1]["instruction"] == "Turn left onto Market Street"
+    assert result["instructions"][-1]["instruction"] == "Arrive at your destination"
 
 
 def test_fetch_osrm_route_reports_missing_road_route(monkeypatch):

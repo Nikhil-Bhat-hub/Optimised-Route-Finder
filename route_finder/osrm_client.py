@@ -45,7 +45,7 @@ def fetch_osrm_route(
         "overview": "full",
         "geometries": "geojson",
         "alternatives": "false",
-        "steps": "false",
+        "steps": "true",
         "generate_hints": "false",
     })
     request = Request(
@@ -87,6 +87,7 @@ def fetch_osrm_route(
         distance_m = float(route["distance"])
         duration_s = float(route["duration"])
         path = [(float(lat), float(lon)) for lon, lat in raw_coordinates]
+        instructions = _route_instructions(route.get("legs", []))
     except (KeyError, IndexError, TypeError, ValueError) as exc:
         raise OSRMRouteError("The routing service returned incomplete route data.") from exc
 
@@ -110,6 +111,7 @@ def fetch_osrm_route(
         "distance_km": distance_m / 1000,
         "duration_min": duration_s / 60,
         "coordinates": path,
+        "instructions": instructions,
         "provider": "OSRM · OpenStreetMap",
     }
 
@@ -122,3 +124,32 @@ def _validate_coordinate(point: tuple[float, float]) -> tuple[float, float]:
     if not math.isfinite(lat) or not math.isfinite(lon) or not -90 <= lat <= 90 or not -180 <= lon <= 180:
         raise OSRMRouteError("A location has invalid latitude or longitude values.")
     return lat, lon
+
+
+def _route_instructions(legs: list[dict[str, Any]]) -> list[dict[str, float | str]]:
+    directions = []
+    for leg in legs:
+        for step in leg.get("steps", []):
+            maneuver = step.get("maneuver", {})
+            action = str(maneuver.get("type", "continue")).replace("_", " ")
+            modifier = str(maneuver.get("modifier", "")).replace("_", " ")
+            road = str(step.get("name") or "the road")
+            if action == "depart":
+                instruction = f"Head toward {road}"
+            elif action == "arrive":
+                instruction = "Arrive at your destination"
+            elif action == "turn" and modifier:
+                instruction = f"Turn {modifier} onto {road}"
+            elif action == "roundabout":
+                exit_number = maneuver.get("exit")
+                instruction = f"Take exit {exit_number} at the roundabout onto {road}" if exit_number else f"Take the roundabout onto {road}"
+            elif action in ("merge", "fork", "on ramp", "off ramp") and modifier:
+                instruction = f"{action.capitalize()} {modifier} onto {road}"
+            else:
+                instruction = f"Continue on {road}"
+            directions.append({
+                "instruction": instruction,
+                "distance_km": float(step.get("distance", 0)) / 1000,
+                "duration_min": float(step.get("duration", 0)) / 60,
+            })
+    return directions

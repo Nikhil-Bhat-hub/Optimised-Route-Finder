@@ -11,6 +11,7 @@ def load_bengaluru_graph(
     place: str | None = None,
     cache_path: str | None = None,
     retries: int = 3,
+    request_timeout: int = 180,
 ) -> RoadGraph:
     try:
         import osmnx as ox
@@ -21,7 +22,7 @@ def load_bengaluru_graph(
     path = Path(cache_path); path.parent.mkdir(parents=True, exist_ok=True)
     ox.settings.use_cache = True
     ox.settings.overpass_rate_limit = True
-    ox.settings.requests_timeout = 180
+    ox.settings.requests_timeout = request_timeout
     if path.exists():
         network = ox.load_graphml(path)
     else:

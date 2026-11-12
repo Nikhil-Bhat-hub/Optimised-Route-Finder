@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#f5f7f5">
+    <meta name="description" content="Plan and compare road routes anywhere in Bengaluru with Routewise.">
+    <title>Routewise — Bengaluru route planner</title>
+    <link rel="preconnect" href="https://unpkg.com">
+    <link rel="preconnect" href="https://tile.openstreetmap.org">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Routewise home">
+        <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 19.5 9.5 17l5 2 5.5-2.5V4.5L14.5 7l-5-2L4 7.5v12Z"/><path d="M9.5 5v12M14.5 7v12M7 10l1.4-1.4M16.8 13.8l1.1-1.1"/></svg></span>
+        <span>routewise<span class="brand-city"> / Bengaluru</span></span>
+      </a>
+      <div class="topbar-right">
+        <span class="service-status"><span class="status-dot"></span> Live road routing</span>
+        <a class="api-link" href="/docs" target="_blank" rel="noreferrer">API docs <span aria-hidden="true">↗</span></a>
+      </div>
+    </header>
+
+    <main class="shell">
+      <section class="hero">
+        <div class="hero-copy">
+          <div class="eyebrow"><span class="eyebrow-dot"></span> ROUTE PLANNER · BENGALURU</div>
+          <h1>Find your way<br><span>through the city.</span></h1>
+          <p>Choose any two points on the map. Get a live road route, clear directions, and a thoughtful route comparison.</p>
+        </div>
+        <div class="hero-note"><span class="note-icon">⌖</span><span><strong>Made for Bengaluru</strong><br>Every pin is checked against the city boundary.</span></div>
+      </section>
+
+      <section class="workspace" aria-label="Route planner">
+        <aside class="planner-panel">
+          <div class="panel-heading">
+            <div><div class="section-kicker">YOUR JOURNEY</div><h2>Plan a route</h2></div>
+            <span class="step-count">01 <i>/</i> 02</span>
+          </div>
+          <p class="panel-intro">Search for an address or click anywhere inside Bengaluru to set your route.</p>
+
+          <div class="location-card">
+            <div class="location-row">
+              <span class="location-pin start-pin">A</span>
+              <div class="location-copy"><span class="field-label">STARTING POINT</span><span class="location-value" id="startValue">Choose a point</span></div>
+              <button class="clear-location" data-clear="start" aria-label="Clear starting point" hidden>×</button>
+            </div>
+            <div class="location-divider"><span></span></div>
+            <div class="location-row">
+              <span class="location-pin end-pin">B</span>
+              <div class="location-copy"><span class="field-label">DESTINATION</span><span class="location-value" id="destinationValue">Choose a point</span></div>
+              <button class="clear-location" data-clear="destination" aria-label="Clear destination" hidden>×</button>
+            </div>
+          </div>
+
+          <div class="search-block">
+            <label for="locationSearch" class="field-label">SEARCH A PLACE</label>
+            <div class="search-box">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.3"/><path d="m15.5 15.5 4.2 4.2"/></svg>
+              <input id="locationSearch" type="search" autocomplete="off" placeholder="Street, landmark, neighbourhood…">
+              <button id="searchButton" aria-label="Search places"><span>↵</span></button>
+            </div>
+            <div id="suggestions" class="suggestions" role="listbox" aria-label="Bengaluru places" hidden></div>
+          </div>
+
+          <div class="selecting-row">
+            <span class="field-label">PLACE NEXT PIN</span>
+            <div class="segmented" role="group" aria-label="Choose which route point to place">
+              <button class="segment active" data-target="start" aria-pressed="true"><span class="mini-dot a-dot"></span> Start</button>
+              <button class="segment" data-target="destination" aria-pressed="false"><span class="mini-dot b-dot"></span> Destination</button>
+            </div>
+          </div>
+
+          <div class="optimize-row">
+            <div><span class="field-label">COMPARE ALGORITHMS BY</span><div class="optimize-title">Route metric</div></div>
+            <div class="segmented optimize-toggle" role="group" aria-label="Route priority">
+              <button class="segment active" data-optimize="time" aria-pressed="true">Time</button>
+              <button class="segment" data-optimize="distance" aria-pressed="false">Distance</button>
+            </div>
+          </div>
+
+          <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+          <button id="routeButton" class="route-button" disabled>
+            <span class="route-button-label">Compare routes</span><span class="button-arrow" aria-hidden="true">↗</span>
+          </button>
+          <p class="button-hint">Select a start and destination to continue</p>
+          <div class="boundary-note"><span aria-hidden="true">◎</span><span>Available within Bengaluru city limits</span></div>
+        </aside>
+
+        <div class="map-column">
+          <div class="map-toolbar">
+            <div><span class="section-kicker">EXPLORE THE CITY</span><h2>Pick a point on the map</h2></div>
+            <div class="map-hint"><span class="map-hint-cursor">↖</span> Click to place <span class="map-hint-divider"></span><span class="target-chip" id="targetChip"><i class="mini-dot a-dot"></i> Start point</span></div>
+          </div>
+          <div class="map-frame"><div id="map" role="application" aria-label="Interactive map of Bengaluru. Click to select a start or destination."></div>
+            <div class="map-city-badge"><span class="status-dot"></span> BENGALURU, INDIA</div>
+            <div class="map-zoom-note">Scroll or use + / − to zoom</div>
+          </div>
+          <div class="map-legend"><span><i class="legend-dot start-legend"></i> Start</span><span><i class="legend-dot destination-legend"></i> Destination</span><span class="map-source">Map data © OpenStreetMap contributors</span></div>
+        </div>
+      </section>
+
+      <section id="results" class="results-section" aria-live="polite" hidden>
+        <div class="results-topline"><span class="section-kicker">YOUR ROUTE</span><span id="routeBadge" class="route-badge"><span class="status-dot"></span> ROUTE READY</span></div>
+        <div class="results-grid">
+          <div class="route-summary-card">
+            <div class="route-summary-head"><div><h2 id="summaryTitle">Route overview</h2><p id="summarySubtitle">Live road route</p></div><span class="route-symbol">↗</span></div>
+            <div class="metrics"><div class="metric"><span class="metric-value" id="distanceValue">—</span><span class="metric-label">DISTANCE</span></div><div class="metric-divider"></div><div class="metric"><span class="metric-value" id="durationValue">—</span><span class="metric-label">EST. DRIVE</span></div></div>
+            <div class="trip-points"><div><i class="mini-dot a-dot"></i><span id="summaryStart">Start</span></div><div><i class="mini-dot b-dot"></i><span id="summaryDestination">Destination</span></div></div>
+          </div>
+          <div class="algorithm-card">
+            <div class="algorithm-header"><div><span class="section-kicker">UNDER THE HOOD</span><h2>Algorithm comparison</h2></div><span class="algorithm-icon">⌘</span></div>
+            <p id="comparisonMessage" class="comparison-message">Comparing classic pathfinding algorithms on the road graph.</p>
+            <div id="algorithmResults" class="algorithm-results"></div>
+          </div>
+          <div class="directions-card">
+            <div class="directions-header"><div><span class="section-kicker">STEP BY STEP</span><h2>Directions</h2></div><span id="stepCount" class="step-count">—</span></div>
+            <ol id="directionsList" class="directions-list"></ol>
+          </div>
+        </div>
+      </section>
+
+      <footer class="footer"><a class="footer-brand" href="/">routewise</a><span>Built for clearer journeys across Bengaluru.</span><span><a href="/docs" target="_blank" rel="noreferrer">FastAPI</a> · OpenStreetMap · OSRM</span></footer>
+    </main>
+
+    <div id="toast" class="toast" role="alert" aria-live="assertive" hidden></div>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <script src="/static/app.js" defer></script>
+  </body>
+</html>
