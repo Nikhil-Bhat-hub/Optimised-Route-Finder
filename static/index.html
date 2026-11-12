@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#f5f7f5">
-    <meta name="description" content="Plan and compare road routes anywhere in Bengaluru with Routewise.">
+    <meta name="description" content="Plan and compare traffic-aware road routes anywhere in Bengaluru with Routewise.">
     <title>Routewise — Bengaluru route planner</title>
     <link rel="preconnect" href="https://unpkg.com">
     <link rel="preconnect" href="https://tile.openstreetmap.org">
@@ -18,7 +18,7 @@
         <span>routewise<span class="brand-city"> / Bengaluru</span></span>
       </a>
       <div class="topbar-right">
-        <span class="service-status"><span class="status-dot"></span> Live road routing</span>
+        <span class="service-status"><span class="status-dot"></span> Live road routing & traffic</span>
         <a class="api-link" href="/docs" target="_blank" rel="noreferrer">API docs <span aria-hidden="true">↗</span></a>
       </div>
     </header>
@@ -26,11 +26,11 @@
     <main class="shell">
       <section class="hero">
         <div class="hero-copy">
-          <div class="eyebrow"><span class="eyebrow-dot"></span> ROUTE PLANNER · BENGALURU</div>
+          <div class="eyebrow"><span class="eyebrow-dot"></span> TRAFFIC-AWARE ROUTE PLANNER · BENGALURU</div>
           <h1>Find your way<br><span>through the city.</span></h1>
-          <p>Choose any two points on the map. Get a live road route, clear directions, and a thoughtful route comparison.</p>
+          <p>Choose any two points on the map. Get live road routes, automatic traffic detection, smart bypass rerouting, and algorithm comparisons.</p>
         </div>
-        <div class="hero-note"><span class="note-icon">⌖</span><span><strong>Made for Bengaluru</strong><br>Every pin is checked against the city boundary.</span></div>
+        <div class="hero-note"><span class="note-icon">⌖</span><span><strong>Made for Bengaluru</strong><br>Real-time traffic choke point detection & bypass.</span></div>
       </section>
 
       <section class="workspace" aria-label="Route planner">
@@ -73,6 +73,15 @@
             </div>
           </div>
 
+          <div class="traffic-row">
+            <div><span class="field-label">TRAFFIC CONDITIONS</span><div class="optimize-title">Congestion model</div></div>
+            <div class="segmented traffic-toggle" role="group" aria-label="Traffic model">
+              <button class="segment active" data-traffic="normal" aria-pressed="true">Live / Day</button>
+              <button class="segment" data-traffic="peak" aria-pressed="false">Rush Hour</button>
+              <button class="segment" data-traffic="offpeak" aria-pressed="false">Off-Peak</button>
+            </div>
+          </div>
+
           <div class="optimize-row">
             <div><span class="field-label">COMPARE ALGORITHMS BY</span><div class="optimize-title">Route metric</div></div>
             <div class="segmented optimize-toggle" role="group" aria-label="Route priority">
@@ -83,7 +92,7 @@
 
           <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
           <button id="routeButton" class="route-button" disabled>
-            <span class="route-button-label">Compare routes</span><span class="button-arrow" aria-hidden="true">↗</span>
+            <span class="route-button-label">Find best routes</span><span class="button-arrow" aria-hidden="true">↗</span>
           </button>
           <p class="button-hint">Select a start and destination to continue</p>
           <div class="boundary-note"><span aria-hidden="true">◎</span><span>Available within Bengaluru city limits</span></div>
@@ -98,15 +107,66 @@
             <div class="map-city-badge"><span class="status-dot"></span> BENGALURU, INDIA</div>
             <div class="map-zoom-note">Scroll or use + / − to zoom</div>
           </div>
-          <div class="map-legend"><span><i class="legend-dot start-legend"></i> Start</span><span><i class="legend-dot destination-legend"></i> Destination</span><span class="map-source">Map data © OpenStreetMap contributors</span></div>
+          <div class="map-legend">
+            <span><i class="legend-dot start-legend"></i> Start</span>
+            <span><i class="legend-dot destination-legend"></i> Destination</span>
+            <span><i class="legend-line fastest-line"></i> Fastest Route (Traffic Avoided)</span>
+            <span><i class="legend-line traffic-line"></i> Route with Traffic</span>
+            <span><i class="legend-hazard">⚠️</i> Choke Point</span>
+            <span class="map-source">Map data © OpenStreetMap contributors</span>
+          </div>
         </div>
       </section>
 
       <section id="results" class="results-section" aria-live="polite" hidden>
-        <div class="results-topline"><span class="section-kicker">YOUR ROUTE</span><span id="routeBadge" class="route-badge"><span class="status-dot"></span> ROUTE READY</span></div>
+        <div class="results-topline">
+          <span class="section-kicker">YOUR ROUTES</span>
+          <span id="routeBadge" class="route-badge"><span class="status-dot"></span> ROUTES READY</span>
+        </div>
+
+        <!-- Dynamic Traffic Alert Banner -->
+        <div id="trafficBanner" class="traffic-banner" hidden>
+          <div class="traffic-banner-icon">⚡</div>
+          <div class="traffic-banner-content">
+            <strong id="trafficBannerTitle">Dynamic Traffic Rerouting Active</strong>
+            <p id="trafficBannerText">Heavy traffic detected on primary corridor. An alternate route was automatically generated.</p>
+          </div>
+        </div>
+
+        <!-- Dual Route Cards -->
+        <div class="dual-routes-container" id="dualRoutesContainer">
+          <div class="dual-route-card active" id="cardFastestRoute" role="button" tabindex="0">
+            <div class="route-card-top">
+              <span class="route-badge badge-fastest">⚡ FASTEST (TRAFFIC AVOIDED)</span>
+              <span class="route-time-saved" id="fastestTimeSaved">Saves — min</span>
+            </div>
+            <div class="route-card-main">
+              <span class="route-card-time" id="fastestDuration">—</span>
+              <span class="route-card-dist" id="fastestDistance">—</span>
+            </div>
+            <div class="route-card-status status-clear" id="fastestStatus">
+              <span class="status-indicator"></span> Clear road · Click to view
+            </div>
+          </div>
+
+          <div class="dual-route-card" id="cardTrafficRoute" role="button" tabindex="0">
+            <div class="route-card-top">
+              <span class="route-badge badge-traffic">⚠️ ROUTE WITH TRAFFIC</span>
+              <span class="route-delay-badge" id="trafficDelayBadge">+— min delay</span>
+            </div>
+            <div class="route-card-main">
+              <span class="route-card-time" id="trafficDuration">—</span>
+              <span class="route-card-dist" id="trafficDistance">—</span>
+            </div>
+            <div class="route-card-status status-congested" id="trafficStatus">
+              <span class="status-indicator"></span> Choke points detected · Click to view
+            </div>
+          </div>
+        </div>
+
         <div class="results-grid">
           <div class="route-summary-card">
-            <div class="route-summary-head"><div><h2 id="summaryTitle">Route overview</h2><p id="summarySubtitle">Live road route</p></div><span class="route-symbol">↗</span></div>
+            <div class="route-summary-head"><div><h2 id="summaryTitle">Route overview</h2><p id="summarySubtitle">Selected road path</p></div><span class="route-symbol">↗</span></div>
             <div class="metrics"><div class="metric"><span class="metric-value" id="distanceValue">—</span><span class="metric-label">DISTANCE</span></div><div class="metric-divider"></div><div class="metric"><span class="metric-value" id="durationValue">—</span><span class="metric-label">EST. DRIVE</span></div></div>
             <div class="trip-points"><div><i class="mini-dot a-dot"></i><span id="summaryStart">Start</span></div><div><i class="mini-dot b-dot"></i><span id="summaryDestination">Destination</span></div></div>
           </div>

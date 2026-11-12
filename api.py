@@ -1,4 +1,4 @@
-"""FastAPI website and Bengaluru route-planning API."""
+"""FastAPI website and Bengaluru route-planning API with live traffic analysis."""
 from __future__ import annotations
 
 import asyncio
@@ -24,8 +24,9 @@ from route_finder.geocoding import (
 )
 from route_finder.graph import RoadGraph, haversine_km
 from route_finder.osm import demo_bengaluru_graph, load_bengaluru_graph
-from route_finder.osrm_client import OSRMRouteError, fetch_osrm_route
+from route_finder.osrm_client import OSRMRouteError, fetch_dual_traffic_routes, fetch_osrm_route
 from route_finder.storage import RouteHistory
+from route_finder.traffic import BENGALURU_TRAFFIC_HOTSPOTS
 
 
 load_dotenv()
@@ -42,8 +43,6 @@ _network_lock = threading.Lock()
 def _warm_network() -> None:
     """Load the road graph in the background; OSRM routes remain independent."""
     global _network, _network_mode
-    # A full Bengaluru graph can exceed the memory budget of a free web instance.
-    # Render can still serve live routes through OSRM and geocode through Nominatim.
     if os.getenv("ENABLE_GRAPH_WARMUP", "true").casefold() not in {"1", "true", "yes"}:
         with _network_lock:
             _network_mode = "disabled"
@@ -73,8 +72,8 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(
     title="Routewise Bengaluru API",
-    version="2.0.0",
-    description="Bengaluru-only place lookup, route planning, and algorithm comparison.",
+    version="2.1.0",
+    description="Bengaluru-only place lookup, traffic-aware route planning, and algorithm comparison.",
     lifespan=lifespan,
 )
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -90,6 +89,7 @@ class CoordinateRouteRequest(BaseModel):
     start: RoutePoint
     destination: RoutePoint
     optimize_for: Literal["distance", "time"] = "time"
+    traffic_mode: Literal["normal", "peak", "offpeak"] = "normal"
 
 
 class NodeRouteRequest(BaseModel):
@@ -106,7 +106,30 @@ def website():
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "network": _network_mode, "service": "routewise-bengaluru"}
+    return {
+        "status": "ok",
+        "network": _network_mode,
+        "service": "routewise-bengaluru",
+        "traffic_monitoring": "active",
+        "hotspots_monitored": len(BENGALURU_TRAFFIC_HOTSPOTS),
+    }
+
+
+@app.get("/api/traffic/hotspots")
+def get_traffic_hotspots():
+    """List monitored Bengaluru traffic choke points and severe congestion corridors."""
+    return [
+        {
+            "id": h.id,
+            "name": h.name,
+            "lat": h.lat,
+            "lon": h.lon,
+            "radius_km": h.radius_km,
+            "severity": h.severity,
+            "description": h.description,
+        }
+        for h in BENGALURU_TRAFFIC_HOTSPOTS
+    ]
 
 
 @app.get("/api/locations/search")
@@ -144,10 +167,11 @@ def coordinate_route(request: CoordinateRouteRequest):
         raise HTTPException(status_code=503, detail=f"Location validation is temporarily unavailable: {exc}") from exc
 
     try:
-        road_route = fetch_osrm_route(
+        dual_routes = fetch_dual_traffic_routes(
             (request.start.lat, request.start.lon),
             (request.destination.lat, request.destination.lon),
-            os.getenv("OSRM_BASE_URL"),
+            traffic_mode=request.traffic_mode,
+            base_url=os.getenv("OSRM_BASE_URL"),
         )
     except OSRMRouteError as exc:
         raise HTTPException(status_code=503, detail=f"Live road routing is temporarily unavailable: {exc}") from exc
@@ -164,7 +188,14 @@ def coordinate_route(request: CoordinateRouteRequest):
             "lat": request.destination.lat,
             "lon": request.destination.lon,
         },
-        "route": road_route,
+        "route": dual_routes["route"],
+        "fastest_route": dual_routes["fastest_route"],
+        "traffic_route": dual_routes["traffic_route"],
+        "has_traffic_reroute": dual_routes["has_traffic_reroute"],
+        "time_saved_min": dual_routes["time_saved_min"],
+        "reroute_reason": dual_routes["reroute_reason"],
+        "traffic_mode": dual_routes["traffic_mode"],
+        "traffic_hotspots": dual_routes["traffic_hotspots"],
         "algorithm_comparison": comparison,
     }
 
@@ -269,5 +300,6 @@ def _route_summary(route) -> dict:
         "distance_km": route.distance_km,
         "duration_min": route.duration_min,
         "elapsed_ms": route.elapsed_ms,
+        "nodes_explored": getattr(route, "nodes_explored", 0),
         "segments": max(0, len(route.nodes) - 1),
     }

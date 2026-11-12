@@ -1,4 +1,4 @@
-"""Modern Streamlit interface for the Bengaluru Optimised Route Finder."""
+"""Modern Streamlit interface for the Bengaluru Optimised Route Finder with live traffic analysis."""
 from __future__ import annotations
 
 import os
@@ -11,14 +11,15 @@ from dotenv import load_dotenv
 
 from route_finder.graph import haversine_km
 from route_finder.osm import demo_bengaluru_graph, load_bengaluru_graph
-from route_finder.osrm_client import OSRMRouteError, fetch_osrm_route
+from route_finder.osrm_client import OSRMRouteError, fetch_dual_traffic_routes
 from route_finder.storage import RouteHistory
+from route_finder.traffic import BENGALURU_TRAFFIC_HOTSPOTS
 
 load_dotenv()
 
 
 st.set_page_config(
-    page_title="Routewise · Bengaluru",
+    page_title="Routewise · Bengaluru (Traffic Aware)",
     page_icon="🧭",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -49,6 +50,7 @@ p, label, span { font-family:'DM Sans',sans-serif; }
 .status-pill { display:inline-flex; align-items:center; gap:7px; border-radius:99px; padding:7px 11px; font-size:.78rem; font-weight:700; }
 .status-live { background:#e5f4eb; color:#236b44; }
 .status-demo { background:#fff3dd; color:#8b5c08; }
+.traffic-alert { background:#ecfdf5; border:1px solid #a7f3d0; border-radius:12px; padding:12px 16px; margin:10px 0; color:#065f46; font-size:.95rem; }
 div[data-testid="stMetric"] { background:#fff; border:1px solid var(--line); border-radius:16px; padding:14px 16px; }
 div[data-testid="stMetricLabel"] { color:#74848a; }
 div[data-testid="stMetricValue"] { color:var(--ink); font-family:'Manrope',sans-serif; }
@@ -72,16 +74,15 @@ def get_network():
 
 
 @st.cache_data(ttl=900, max_entries=128, show_spinner=False)
-def get_live_route(start: tuple[float, float], end: tuple[float, float], service_url: str):
-    """Cache public routing calls so reruns and repeat searches do not hit OSRM."""
-    return fetch_osrm_route(start, end, service_url)
+def get_dual_live_routes(start: tuple[float, float], end: tuple[float, float], traffic_mode: str, service_url: str):
+    return fetch_dual_traffic_routes(start, end, traffic_mode=traffic_mode, base_url=service_url)
 
 
 if st.sidebar.button("↻  Retry live road data", use_container_width=True):
     get_network.clear()
     st.session_state.pop("routes", None)
     st.session_state.pop("route_pair", None)
-    st.session_state.pop("osrm_route", None)
+    st.session_state.pop("traffic_data", None)
     st.session_state.pop("osrm_error", None)
     st.rerun()
 
@@ -108,35 +109,32 @@ else:
 st.markdown('<div class="brand">ROUTEWISE&nbsp;&nbsp; / &nbsp;&nbsp;BENGALURU</div>', unsafe_allow_html=True)
 st.markdown("""
 <div class="hero">
-  <span class="hero-tag">CITY ROUTING, MADE CLEAR</span>
-  <h1>Find your better route.</h1>
-  <p>Compare distance and estimated drive time across four classic pathfinding algorithms.</p>
+  <span class="hero-tag">TRAFFIC-AWARE INTELLIGENT ROUTING</span>
+  <h1>Find your fastest route.</h1>
+  <p>Detect road congestion bottlenecks, automatically calculate bypass routes, and compare classic algorithms.</p>
 </div>
 """, unsafe_allow_html=True)
 
 pill_class = "status-live" if network_mode == "live" else "status-demo"
-pill_text = "LIVE OPENSTREETMAP NETWORK" if network_mode == "live" else "DEMO ALGORITHMS · LIVE OSRM ROUTING"
+pill_text = "LIVE OSM NETWORK & TRAFFIC MONITOR" if network_mode == "live" else "DEMO ALGORITHMS · LIVE OSRM & TRAFFIC"
 st.markdown(f'<span class="status-pill {pill_class}">● &nbsp;{pill_text}</span>', unsafe_allow_html=True)
 if network_mode == "demo":
-    st.info("The public OpenStreetMap road graph is unavailable, so algorithm comparisons are using an illustrative Bengaluru network. Live road routing is still available through OSRM when its demo service responds. Use **Retry live road data** in the sidebar to reload the graph.")
-    if network_error:
-        with st.expander("Connection details"):
-            st.code(network_error[:700])
-
+    st.info("Algorithm comparisons are using an illustrative Bengaluru network. Live road routing & traffic analysis remain active through OSRM.")
 
 with st.sidebar:
     st.markdown("### Plan a route")
-    st.caption("Choose two Bengaluru locations and the goal for your trip.")
+    st.caption("Choose two Bengaluru locations and traffic conditions.")
     source = st.selectbox("FROM", places, index=0)
     destination_options = [place for place in places if place != source] or places
-    target = st.selectbox("TO", destination_options, index=min(2, len(destination_options)-1))
+    target = st.selectbox("TO", destination_options, index=min(2, len(destination_options) - 1))
+    traffic_choice = st.radio("TRAFFIC MODEL", ["Normal / Day", "Peak Rush Hour", "Off-Peak Night"], horizontal=True)
+    traffic_mode = "peak" if "Peak" in traffic_choice else ("offpeak" if "Off-Peak" in traffic_choice else "normal")
     metric = st.radio("OPTIMISE FOR", ["Distance", "Travel time"], horizontal=True)
     metric_key = "time" if metric == "Travel time" else "distance"
-    find_route = st.button("Find my route  →", type="primary", use_container_width=True)
+    find_route = st.button("Find best routes  →", type="primary", use_container_width=True)
     st.markdown("---")
-    st.caption("**Algorithms**")
-    st.caption("Dijkstra · A* · BFS · DFS")
-    st.caption("Estimated drive times use road speed metadata when available.")
+    st.caption("**Monitored Bottlenecks**")
+    st.caption(f"{len(BENGALURU_TRAFFIC_HOTSPOTS)} active choke points (Silk Board, Ecospace ORR, Tin Factory, Hebbal, etc.)")
 
 
 if find_route:
@@ -154,12 +152,12 @@ if find_route:
     st.session_state["route_metric"] = metric_key
     try:
         service_url = os.getenv("OSRM_BASE_URL", "https://router.project-osrm.org")
-        st.session_state["osrm_route"] = get_live_route(
-            LANDMARKS[source], LANDMARKS[target], service_url
+        st.session_state["traffic_data"] = get_dual_live_routes(
+            LANDMARKS[source], LANDMARKS[target], traffic_mode, service_url
         )
         st.session_state["osrm_error"] = None
     except OSRMRouteError as exc:
-        st.session_state["osrm_route"] = None
+        st.session_state["traffic_data"] = None
         st.session_state["osrm_error"] = str(exc)
 
 routes = st.session_state.get("routes", [])
@@ -169,8 +167,8 @@ route_matches_selection = (
     and st.session_state.get("route_metric") == metric_key
 )
 shown_routes = routes if route_matches_selection else []
-shown_osrm_route = (
-    st.session_state.get("osrm_route")
+traffic_data = (
+    st.session_state.get("traffic_data")
     if route_pair == (source, target)
     else None
 )
@@ -180,92 +178,93 @@ osrm_error = (
     else None
 )
 
-if shown_routes:
-    best = next((route for route in shown_routes if route.algorithm == "Dijkstra"), shown_routes[0])
-    metric_cols = st.columns(4)
-    metric_cols[0].metric("BEST DISTANCE" if metric_key == "distance" else "FASTEST ROUTE", f"{best.distance_km:.1f} km")
-    metric_cols[1].metric("EST. DRIVE TIME", f"{best.duration_min:.0f} min")
-    metric_cols[2].metric("ROAD SEGMENTS", f"{len(best.nodes)-1}")
-    metric_cols[3].metric("ALGORITHMS", f"{len(shown_routes)}")
+if traffic_data:
+    fastest = traffic_data["fastest_route"]
+    traffic = traffic_data["traffic_route"]
 
-if shown_osrm_route:
-    live_cols = st.columns([1, 1, 2])
-    live_cols[0].metric("LIVE ROAD DISTANCE", f'{shown_osrm_route["distance_km"]:.1f} km')
-    live_cols[1].metric("OSRM DRIVE ESTIMATE", f'{shown_osrm_route["duration_min"]:.0f} min')
-    live_cols[2].caption(
-        "Live road route from the free OSRM demo service. Its distance and ETA are "
-        "an external baseline; the algorithm comparison above uses the selected graph."
-    )
-    if network_mode == "demo" and shown_routes:
-        st.info(
-            "The live OSRM route uses real road data. The Dijkstra, A*, BFS, and DFS "
-            "comparison is running on the illustrative demo network while Overpass is unavailable."
-        )
+    if traffic_data.get("has_traffic_reroute"):
+        st.markdown(f"""
+        <div class="traffic-alert">
+          <strong>⚡ Dynamic Traffic Rerouting Active:</strong> {traffic_data['reroute_reason']}
+        </div>
+        """, unsafe_allow_html=True)
+
+    t1, t2, t3, t4 = st.columns(4)
+    t1.metric("FASTEST (TRAFFIC AVOIDED)", f"{fastest['duration_min']:.0f} min", delta=f"-{traffic_data['time_saved_min']:.0f} min saved" if traffic_data['has_traffic_reroute'] else "Optimal")
+    t2.metric("FASTEST DISTANCE", f"{fastest['distance_km']:.1f} km")
+    t3.metric("ROUTE WITH TRAFFIC", f"{traffic['duration_min']:.0f} min", delta=f"+{traffic['traffic_delay_min']:.0f} min delay" if traffic.get('traffic_delay_min', 0) > 0 else "Normal")
+    t4.metric("TRAFFIC DISTANCE", f"{traffic['distance_km']:.1f} km")
+
 elif osrm_error:
     st.warning(f"Live road routing is temporarily unavailable. {osrm_error} The local route comparison is still available.")
 
 
-left, right = st.columns([.82, 1.45], gap="large")
+left, right = st.columns([.85, 1.45], gap="large")
 with left:
     st.markdown('<div class="section-kicker">ROUTE OPTIONS</div>', unsafe_allow_html=True)
     st.markdown("## Compare paths")
-    st.markdown('<div class="caption">Each search finds a path; BFS and DFS are unweighted and may not minimise distance or time.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="caption">Dual traffic routing compared against classic Dijkstra, A*, BFS, and DFS.</div>', unsafe_allow_html=True)
     if shown_routes:
         table = [{
             "Algorithm": route.algorithm,
             "Distance": f"{route.distance_km:.2f} km",
             "Drive time": f"{route.duration_min:.0f} min",
-            "Search": f"{route.elapsed_ms:.2f} ms",
-            "Segments": len(route.nodes)-1,
+            "Nodes explored": getattr(route, "nodes_explored", 0),
+            "Search (ms)": f"{route.elapsed_ms:.2f}",
         } for route in shown_routes]
         st.dataframe(table, use_container_width=True, hide_index=True)
-        st.markdown(f'<div class="panel"><div class="section-kicker">RECOMMENDED</div><div class="route-title">{best.algorithm} · {best.distance_km:.1f} km</div><div class="caption">About {best.duration_min:.0f} minutes · {len(best.nodes)-1} road segments</div></div>', unsafe_allow_html=True)
     else:
-        st.markdown('<div class="panel"><div class="section-kicker">READY WHEN YOU ARE</div><div class="route-title">Your route comparison will appear here.</div><div class="caption">Pick your start and destination in the sidebar, then select Find my route.</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="panel"><div class="section-kicker">READY WHEN YOU ARE</div><div class="route-title">Your route comparison will appear here.</div><div class="caption">Pick your start and destination in the sidebar, then select Find best routes.</div></div>', unsafe_allow_html=True)
 
 with right:
     st.markdown('<div class="section-kicker">CITY MAP</div>', unsafe_allow_html=True)
-    st.markdown("## Bengaluru, on the map")
-    route_for_map = best if shown_routes and network_mode == "live" else None
-    coordinates = [graph.coordinates[node] for node in route_for_map.nodes] if route_for_map else []
-    live_coordinates = shown_osrm_route["coordinates"] if shown_osrm_route else []
-    if live_coordinates:
-        center = live_coordinates[len(live_coordinates)//2]
-    elif coordinates:
-        center = coordinates[len(coordinates)//2]
-    else:
-        center = (12.9716, 77.5946)
+    st.markdown("## Bengaluru, live route & traffic view")
+    center = (12.9716, 77.5946)
+    if traffic_data:
+        coords = traffic_data["fastest_route"]["coordinates"]
+        if coords:
+            center = coords[len(coords) // 2]
     city_map = folium.Map(location=center, zoom_start=12, tiles="OpenStreetMap", control_scale=True)
-    if route_for_map:
-        folium.PolyLine(coordinates, color="#e58c36", weight=5, opacity=.82,
-                        dash_array="8, 8",
-                        tooltip=f"{route_for_map.algorithm} · {route_for_map.distance_km:.1f} km").add_to(city_map)
-    if live_coordinates:
-        folium.PolyLine(
-            live_coordinates,
-            color="#087e79",
-            weight=6,
-            opacity=.92,
-            tooltip=(
-                f"OSRM · {shown_osrm_route['distance_km']:.1f} km · "
-                f"{shown_osrm_route['duration_min']:.0f} min"
-            ),
-        ).add_to(city_map)
-    if route_for_map or live_coordinates:
-        start_point = live_coordinates[0] if live_coordinates else coordinates[0]
-        end_point = live_coordinates[-1] if live_coordinates else coordinates[-1]
-        folium.Marker(start_point, tooltip=f"Start · {source}",
-                      icon=folium.Icon(color="green", icon="play", prefix="fa")).add_to(city_map)
-        folium.Marker(end_point, tooltip=f"Destination · {target}",
-                      icon=folium.Icon(color="red", icon="flag", prefix="fa")).add_to(city_map)
-        all_coordinates = list(live_coordinates) + (coordinates if route_for_map else [])
-        city_map.fit_bounds(all_coordinates, padding=(30, 30))
-    else:
-        folium.CircleMarker(center, radius=8, color="#087e79", fill=True,
-                            tooltip="Bengaluru").add_to(city_map)
-    st_folium(city_map, height=520, use_container_width=True, returned_objects=[])
-    st.caption("Map data © OpenStreetMap contributors · Teal shows the live OSRM route; dashed amber shows the selected algorithm path when live road-network data is loaded.")
 
+    if traffic_data:
+        fastest_coords = traffic_data["fastest_route"]["coordinates"]
+        traffic_coords = traffic_data["traffic_route"]["coordinates"]
+
+        # Route with traffic: Coral Red
+        folium.PolyLine(
+            traffic_coords,
+            color="#dc2626",
+            weight=4,
+            opacity=0.7,
+            dash_array="6, 6",
+            tooltip=f"Route with Traffic · {traffic_data['traffic_route']['duration_min']:.0f} min",
+        ).add_to(city_map)
+
+        # Fastest route (avoids traffic): Emerald Green
+        folium.PolyLine(
+            fastest_coords,
+            color="#059669",
+            weight=6,
+            opacity=0.95,
+            tooltip=f"Fastest Route (Traffic Avoided) · {traffic_data['fastest_route']['duration_min']:.0f} min",
+        ).add_to(city_map)
+
+        # Bottleneck warning markers
+        for spot in traffic_data.get("traffic_hotspots", []):
+            folium.Marker(
+                [spot["lat"], spot["lon"]],
+                tooltip=f"⚠️ {spot['name']} ({spot['severity'].upper()})",
+                icon=folium.Icon(color="red", icon="warning-sign", prefix="glyphicon"),
+            ).add_to(city_map)
+
+        folium.Marker(fastest_coords[0], tooltip=f"Start · {source}", icon=folium.Icon(color="green", icon="play", prefix="fa")).add_to(city_map)
+        folium.Marker(fastest_coords[-1], tooltip=f"Destination · {target}", icon=folium.Icon(color="red", icon="flag", prefix="fa")).add_to(city_map)
+        city_map.fit_bounds(fastest_coords + traffic_coords, padding=(30, 30))
+    else:
+        folium.CircleMarker(center, radius=8, color="#087e79", fill=True, tooltip="Bengaluru").add_to(city_map)
+
+    st_folium(city_map, height=520, use_container_width=True, returned_objects=[])
+    st.caption("Map data © OpenStreetMap contributors · Solid green: fastest route avoiding traffic · Dashed red: route with traffic choke points.")
 
 st.markdown("---")
 history = RouteHistory().recent(50)
@@ -290,4 +289,4 @@ with recent_searches:
     else:
         st.caption("Your saved route searches will show up here.")
 
-st.markdown("<div style='text-align:center;color:#8a989d;font-size:.8rem;padding:2rem 0 0'>ROUTEWISE · BUILT FOR BENGALURU · ROUTING BY OSRM · MAP DATA © OPENSTREETMAP CONTRIBUTORS</div>", unsafe_allow_html=True)
+st.markdown("<div style='text-align:center;color:#8a989d;font-size:.8rem;padding:2rem 0 0'>ROUTEWISE · BUILT FOR BENGALURU · ROUTING & TRAFFIC BY OSRM · MAP DATA © OPENSTREETMAP CONTRIBUTORS</div>", unsafe_allow_html=True)
