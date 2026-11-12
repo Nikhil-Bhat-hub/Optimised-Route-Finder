@@ -11,11 +11,12 @@ Routewise is designed for exploring route-planning trade-offs inside Bengaluru. 
 - Map clicks and place search for locations inside Bengaluru. Points outside the supported city area receive a clear boundary message.
 - Browser geolocation for a starting point, shareable route links, and an **Open in Google Maps** export.
 - Multi-stop routes and a nearest-neighbor plus 2-opt stop-order optimizer.
-- Journey efficiency summaries with estimated average speed, modeled delay share, and stop count.
-- Typical, peak, and off-peak traffic scenarios with corridor delay estimates and available alternate OSRM routes.
+- Traffic-aware route times and highlighted traffic-affected road sections through TomTom Routing API when a key is configured.
+- Automatic live route alternatives where TomTom returns them, plus a truthful OSRM estimate fallback when live traffic is unavailable.
+- Journey summaries with estimated average speed, provider-reported live delay, and stop count.
 - A map playback of sampled frontier expansions and a count of explored graph nodes.
-- A monsoon-caution toggle that marks a few static underpass risk areas and attempts to find a route around them.
-- An approximate terrain profile from Open-Elevation and an illustrative Namma Metro comparison.
+- An optional monsoon-caution overlay with static underpass markers; these are not live flood reports and do not change the route.
+- An illustrative Namma Metro comparison.
 - Responsive mobile route-planner sheet that can be dragged between map and planning views.
 - FastAPI endpoints and interactive OpenAPI documentation at /docs.
 
@@ -23,11 +24,11 @@ Routewise is designed for exploring route-planning trade-offs inside Bengaluru. 
 
 Route geometry and baseline drive durations come from the public OSRM routing service over OpenStreetMap road data. Public routes may be rate-limited or temporarily unavailable.
 
-Traffic values are **modeled estimates**, not live traffic observations. The peak/off-peak factors and known corridor hotspots help compare scenarios; they do not use a live traffic provider or guarantee an actual travel time.
+With `TOMTOM_API_KEY` configured, each route request automatically uses TomTom's traffic-aware Routing API for current ETAs, alternative routes, and traffic-affected sections along the route. TomTom's free tier currently includes 20,000 Routing API requests per month. Without a valid key or when the provider is unavailable, the app keeps route planning available through OSRM and labels its time as an estimate without live traffic adjustment. Traffic is refreshed whenever a route is requested; the app does not continuously poll while a route is open. The service key is read only by FastAPI and is never sent to the browser.
 
-Monsoon areas are static planning cautions, not current flood reports. Elevation is approximate terrain data and may differ from the road surface. Metro times use approximate station locations, average speeds, and an assumed wait; they are not an operational timetable. Check [official BMRCL timings](https://english.bmrc.co.in/metro-timings/) before travel.
+Monsoon areas are static planning cautions, not current flood reports. Metro times use approximate station locations, average speeds, and an assumed wait; they are not an operational timetable. Check [official BMRCL timings](https://english.bmrc.co.in/metro-timings/) before travel.
 
-The public Nominatim, OSRM, Open-Elevation, and OpenStreetMap tile services are shared community services. They can slow down, rate-limit, or change availability. For sustained production traffic, configure hosted providers with suitable service terms and capacity.
+The public Nominatim, OSRM, TomTom, and OpenStreetMap tile services are shared community services. They can slow down, rate-limit, or change availability. For sustained production traffic, configure hosted providers with suitable service terms and capacity.
 
 ## Run the FastAPI app locally
 
@@ -44,6 +45,10 @@ uvicorn api:app --reload
 ~~~
 
 Open [http://127.0.0.1:8000](http://127.0.0.1:8000). Road routing and place lookup work without an API key. Algorithm comparisons are enabled when the compact graph is present at data/bengaluru-compact.json.gz.
+
+### Enable live traffic
+
+Create a free [TomTom developer account](https://my.tomtom.com/) and generate an API key. Add it as `TOMTOM_API_KEY` in your local `.env` file, or in the Render service's environment settings. The key remains server-side. The page applies current traffic automatically when a route is requested and displays traffic sections on the selected route. Without the key, routes continue to work with baseline OSRM times and the page labels live traffic as unavailable.
 
 ### Build the compact algorithm graph
 
@@ -70,13 +75,12 @@ streamlit run app.py
 | Method | Endpoint | Purpose |
 | --- | --- | --- |
 | GET | /health | Service, graph, and routing status |
+| GET | /api/traffic/status | Whether TomTom live traffic is configured |
 | GET | /api/locations/search?q=Koramangala | Search for a Bengaluru place |
 | GET | /api/locations/reverse?lat=12.93&lon=77.62 | Check and label a map point |
-| GET | /api/traffic/hotspots | Modeled traffic corridors |
 | GET | /api/rain/hazards | Static monsoon-caution locations |
-| POST | /api/route | Multi-stop route, modeled conditions, and algorithm results |
-| POST | /api/route/optimize-order | Optimize the order of up to ten points with OSRM durations and 2-opt |
-| POST | /api/elevation | Look up terrain elevations along a sampled route |
+| POST | /api/route | Live traffic routes when configured, otherwise OSRM estimates, plus algorithm results |
+| POST | /api/route/optimize-order | Optimize up to ten stops with OSRM durations and 2-opt |
 | POST | /api/transit/estimate | Compare with an illustrative metro estimate |
 | POST | /routes | Backward-compatible node-based graph algorithm results |
 | GET | /history | Recent node-based route history |
@@ -90,13 +94,11 @@ Example route request:
     {"lat": 12.9756, "lon": 77.6066, "label": "MG Road"}
   ],
   "destination": {"lat": 12.9352, "lon": 77.6245, "label": "Koramangala"},
-  "optimize_for": "time",
-  "traffic_mode": "peak",
-  "avoid_flood": false
+  "optimize_for": "time"
 }
 ~~~
 
-The API validates every selected stop against the supported Bengaluru area. traffic_mode accepts normal, peak, or offpeak.
+The API validates every selected stop against the supported Bengaluru area. `GET /api/traffic/status` reports whether the live provider key is configured without exposing it.
 
 ## Tests and checks
 
@@ -115,4 +117,3 @@ The Render Blueprint in render.yaml defines a free web service using requirement
 ## Attribution and license
 
 Map data © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright), available under the [ODbL](https://www.openstreetmap.org/copyright). The project is licensed under the MIT License.
-

@@ -25,7 +25,7 @@ button,a,input,select{outline-offset:3px}
 .journey-actions{display:flex;gap:10px;margin-top:15px}
 .journey-actions>*{flex:1}
 .journey-actions a[aria-disabled="true"]{opacity:.45;pointer-events:none}
-.insights-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:15px;margin-top:15px}
+.insights-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:15px;margin-top:15px}
 .insight-card{min-width:0;padding:22px;border:1px solid #e7ece9;border-radius:18px;background:#fff;box-shadow:0 8px 24px rgba(24,42,39,.035)}
 .insight-card h2{margin:4px 0 0;font:700 18px/1.25 Manrope,sans-serif;letter-spacing:-.5px}
 .insight-copy,.muted-note{font-size:11px;line-height:1.6;color:var(--muted)}
@@ -53,6 +53,8 @@ button,a,input,select{outline-offset:3px}
 .efficiency-strip span{font-size:8px;letter-spacing:.8px;color:var(--muted);font-weight:700}
 .route-marker.stop{background:#6b7c90}
 .mini-dot.stop-dot{background:#6b7c90}
+.dual-routes-container.single-route{grid-template-columns:minmax(260px,620px)}
+.status-neutral{color:#84918c}.status-neutral .status-indicator{background:#9ba8a3}
 @media(max-width:1000px){.insights-grid{grid-template-columns:1fr 1fr}.metro-card{grid-column:1/-1}}
 @media(max-width:740px){
   .workspace{position:relative;display:block;min-height:68vh;height:min(75vh,760px);overflow:hidden;border-radius:17px}

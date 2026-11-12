@@ -1,4 +1,4 @@
-"""FastAPI website and Bengaluru route-planning API with modeled condition estimates."""
+"""FastAPI website and Bengaluru route-planning API with optional live traffic."""
 from __future__ import annotations
 
 import asyncio
@@ -18,7 +18,6 @@ from pydantic import BaseModel, Field
 from route_finder.geocoding import (
     GeocodingError,
     LocationOutsideBengaluru,
-    is_inside_bengaluru_bounds,
     require_bengaluru_point,
     reverse_bengaluru,
     search_bengaluru,
@@ -28,15 +27,11 @@ from route_finder.graph import RoadGraph, haversine_km
 from route_finder.metro import estimate_metro
 from route_finder.osrm_client import (
     OSRMRouteError,
-    async_fetch_dual_traffic_routes,
     async_fetch_osrm_duration_matrix,
 )
+from route_finder.live_traffic import async_fetch_route_options
 from route_finder.storage import RouteHistory
-from route_finder.traffic import (
-    BENGALURU_TRAFFIC_HOTSPOTS,
-    FLOOD_RISK_POINTS,
-    analyze_route_traffic,
-)
+from route_finder.traffic import FLOOD_RISK_POINTS
 from route_finder.tsp import optimize_stop_order
 
 
@@ -104,17 +99,10 @@ class CoordinateRouteRequest(BaseModel):
     destination: RoutePoint
     waypoints: list[RoutePoint] = Field(default_factory=list, max_length=8)
     optimize_for: Literal["distance", "time"] = "time"
-    traffic_mode: Literal["normal", "peak", "offpeak"] = "normal"
-    avoid_flood: bool = False
 
 
 class OptimizeOrderRequest(BaseModel):
     points: list[RoutePoint] = Field(min_length=3, max_length=10)
-    traffic_mode: Literal["normal", "peak", "offpeak"] = "normal"
-
-
-class ElevationRequest(BaseModel):
-    coordinates: list[RoutePoint] = Field(min_length=2, max_length=32)
 
 
 class TransitEstimateRequest(BaseModel):
@@ -136,31 +124,30 @@ def website():
 
 @app.get("/health")
 def health():
+    traffic_configured = bool(os.getenv("TOMTOM_API_KEY"))
     return {
         "status": "ok",
         "network": _network_mode,
         "service": "routewise-bengaluru",
-        "traffic_estimation": "modeled",
+        "traffic_provider": "TomTom",
+        "live_traffic_configured": traffic_configured,
         "routing_provider": "OSRM",
-        "hotspots_monitored": len(BENGALURU_TRAFFIC_HOTSPOTS),
     }
 
 
-@app.get("/api/traffic/hotspots")
-def get_traffic_hotspots():
-    """List static modeled Bengaluru traffic choke points."""
-    return [
-        {
-            "id": h.id,
-            "name": h.name,
-            "lat": h.lat,
-            "lon": h.lon,
-            "radius_km": h.radius_km,
-            "severity": h.severity,
-            "description": h.description,
-        }
-        for h in BENGALURU_TRAFFIC_HOTSPOTS
-    ]
+@app.get("/api/traffic/status")
+def traffic_status():
+    """Expose live-feed availability without revealing the provider key."""
+    configured = bool(os.getenv("TOMTOM_API_KEY"))
+    return {
+        "available": configured,
+        "provider": "TomTom",
+        "message": (
+            "Live traffic is requested automatically when a route is planned."
+            if configured
+            else "Add TOMTOM_API_KEY to the service environment to enable live traffic."
+        ),
+    }
 
 
 @app.get("/api/rain/hazards")
@@ -202,18 +189,9 @@ async def route_optimize_order(request: OptimizeOrderRequest):
             [(point.lat, point.lon) for point in points],
             base_url=os.getenv("OSRM_BASE_URL"),
         )
-        coordinates = [(point.lat, point.lon) for point in points]
         matrix = [
-            [
-                analyze_route_traffic(
-                    [coordinates[source], coordinates[target]],
-                    matrix[source][target],
-                    mode=request.traffic_mode,
-                ).duration_with_traffic_min
-                if source != target else 0.0
-                for target in range(len(points))
-            ]
-            for source in range(len(points))
+            [value if source != target else 0.0 for target, value in enumerate(row)]
+            for source, row in enumerate(matrix)
         ]
         order, total = optimize_stop_order(matrix)
     except LocationOutsideBengaluru as exc:
@@ -227,51 +205,7 @@ async def route_optimize_order(request: OptimizeOrderRequest):
         "order": order,
         "estimated_drive_min": total,
         "method": "nearest-neighbor initialization + 2-opt improvement",
-        "estimate_notice": (
-            "Stop order uses OSRM drive durations plus a modeled hotspot estimate between stops; "
-            "it is not a live traffic prediction."
-        ),
-    }
-
-
-@app.post("/api/elevation")
-async def route_elevation(request: ElevationRequest):
-    try:
-        import httpx
-    except ImportError as exc:
-        raise HTTPException(status_code=503, detail="Elevation service is not configured on this host.") from exc
-    if any(not is_inside_bengaluru_bounds(point.lat, point.lon) for point in request.coordinates):
-        raise HTTPException(status_code=422, detail="Elevation profiles are available only inside Bengaluru.")
-    locations = [
-        {"latitude": point.lat, "longitude": point.lon}
-        for point in request.coordinates
-    ]
-    try:
-        async with httpx.AsyncClient(timeout=12, follow_redirects=True) as client:
-            response = await client.post(
-                os.getenv("ELEVATION_API_URL", "https://api.open-elevation.com/api/v1/lookup"),
-                json={"locations": locations},
-                headers={"Accept": "application/json"},
-            )
-            response.raise_for_status()
-            values = response.json().get("results", [])
-    except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as exc:
-        raise HTTPException(status_code=502, detail="Elevation data is temporarily unavailable.") from exc
-    if len(values) != len(locations):
-        raise HTTPException(status_code=502, detail="Elevation provider returned an incomplete profile.")
-    distance_km = 0.0
-    profile = []
-    for index, value in enumerate(values):
-        if index:
-            previous = request.coordinates[index - 1]
-            current = request.coordinates[index]
-            distance_km += haversine_km((previous.lat, previous.lon), (current.lat, current.lon))
-        profile.append({"distance_km": round(distance_km, 2), "elevation_m": float(value["elevation"])})
-    return {
-        "profile": profile,
-        "provider": "Open-Elevation",
-        "source_url": "https://github.com/Jorl17/open-elevation/blob/master/docs/api.md",
-        "estimate_notice": "Terrain elevations are approximate and may not represent road-surface elevation.",
+        "estimate_notice": "Stop ordering uses current OSRM road durations; it does not use live traffic adjustments.",
     }
 
 
@@ -316,11 +250,10 @@ async def coordinate_route(request: CoordinateRouteRequest):
 
     try:
         points = [(point.lat, point.lon) for point in locations]
-        dual_routes = await async_fetch_dual_traffic_routes(
+        route_data = await async_fetch_route_options(
             points,
-            traffic_mode=request.traffic_mode,
-            base_url=os.getenv("OSRM_BASE_URL"),
-            avoid_flood=request.avoid_flood,
+            api_key=os.getenv("TOMTOM_API_KEY"),
+            osrm_base_url=os.getenv("OSRM_BASE_URL"),
         )
     except OSRMRouteError as exc:
         raise HTTPException(status_code=503, detail=f"Live road routing is temporarily unavailable: {exc}") from exc
@@ -328,6 +261,14 @@ async def coordinate_route(request: CoordinateRouteRequest):
     comparison = await asyncio.to_thread(
         _compare_algorithms, points[0], points[-1], request.optimize_for
     )
+    routes = route_data["routes"]
+    if not routes:
+        raise HTTPException(status_code=503, detail="No usable road route was returned.")
+    for route in routes:
+        route["rain_risks"] = []
+    selected_route = routes[0]
+    alternate_route = routes[1] if len(routes) > 1 else None
+    live_traffic = route_data["traffic"]
     return {
         "start": {"label": validated[0]["label"], "lat": request.start.lat, "lon": request.start.lon},
         "waypoints": [
@@ -339,17 +280,24 @@ async def coordinate_route(request: CoordinateRouteRequest):
             "lat": request.destination.lat,
             "lon": request.destination.lon,
         },
-        "route": dual_routes["route"],
-        "fastest_route": dual_routes["fastest_route"],
-        "traffic_route": dual_routes["traffic_route"],
-        "has_traffic_reroute": dual_routes["has_traffic_reroute"],
-        "time_saved_min": dual_routes["time_saved_min"],
-        "reroute_reason": dual_routes["reroute_reason"],
-        "traffic_mode": dual_routes["traffic_mode"],
-        "traffic_hotspots": dual_routes["traffic_hotspots"],
-        "rain_mode": dual_routes["rain_mode"],
-        "rain_risks": dual_routes["rain_risks"],
-        "estimate_notice": dual_routes["estimate_notice"],
+        "route": selected_route,
+        "routes": routes,
+        "fastest_route": selected_route,
+        "traffic_route": alternate_route or selected_route,
+        "has_traffic_reroute": bool(alternate_route),
+        "time_saved_min": (
+            max(0, round(alternate_route["duration_min"] - selected_route["duration_min"], 1))
+            if alternate_route else 0
+        ),
+        "reroute_reason": live_traffic["message"],
+        "traffic_hotspots": [],
+        "rain_risks": selected_route["rain_risks"],
+        "live_traffic": live_traffic,
+        "estimate_notice": (
+            "Route timing and marked traffic sections use TomTom's current traffic-aware routing data."
+            if live_traffic["available"]
+            else "Live traffic is unavailable. The displayed time is an OSRM route estimate without live traffic adjustment."
+        ),
         "algorithm_comparison": comparison,
     }
 

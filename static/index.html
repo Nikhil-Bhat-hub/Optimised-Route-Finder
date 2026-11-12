@@ -19,7 +19,7 @@
         <span>routewise<span class="brand-city"> / Bengaluru</span></span>
       </a>
       <div class="topbar-right">
-        <span class="service-status"><span class="status-dot"></span> Road routes · modeled traffic</span>
+        <span class="service-status"><span class="status-dot"></span> Checking live traffic…</span>
         <a class="api-link" href="/docs" target="_blank" rel="noreferrer">API docs <span aria-hidden="true">↗</span></a>
       </div>
     </header>
@@ -29,9 +29,9 @@
         <div class="hero-copy">
           <div class="eyebrow"><span class="eyebrow-dot"></span> TRAFFIC-AWARE ROUTE PLANNER · BENGALURU</div>
           <h1>Find your way<br><span>through the city.</span></h1>
-          <p>Plan Bengaluru trips with OpenStreetMap road routes, modeled traffic scenarios, multi-stop ordering, and a visual pathfinding lab.</p>
+          <p>Plan Bengaluru trips with live traffic-aware routing, multi-stop planning, and a visual pathfinding lab.</p>
         </div>
-        <div class="hero-note"><span class="note-icon">⌖</span><span><strong>Made for Bengaluru</strong><br>Traffic and monsoon conditions are planning estimates.</span></div>
+        <div class="hero-note"><span class="note-icon">⌖</span><span><strong>Made for Bengaluru</strong><br>Live road traffic when enabled · static monsoon cautions.</span></div>
       </section>
 
       <section class="workspace" aria-label="Route planner">
@@ -83,16 +83,7 @@
             </div>
           </div>
 
-          <div class="traffic-row">
-            <div><span class="field-label">TRAFFIC MODEL</span><div class="optimize-title">Estimated conditions</div></div>
-            <div class="segmented traffic-toggle" role="group" aria-label="Traffic model">
-              <button class="segment active" data-traffic="normal" aria-pressed="true">Typical</button>
-              <button class="segment" data-traffic="peak" aria-pressed="false">Peak</button>
-              <button class="segment" data-traffic="offpeak" aria-pressed="false">Off-peak</button>
-            </div>
-          </div>
-
-          <label class="rain-toggle"><input id="avoidFloodToggle" type="checkbox"><span><strong>Monsoon caution mode</strong><small>Avoid static flood-risk underpass areas where possible</small></span></label>
+          <label class="rain-toggle"><input id="avoidFloodToggle" type="checkbox"><span><strong>Show monsoon caution points</strong><small>Static underpass cautions only; not live flood reports</small></span></label>
 
           <div class="optimize-row">
             <div><span class="field-label">COMPARE ALGORITHMS BY</span><div class="optimize-title">Route metric</div></div>
@@ -122,9 +113,8 @@
           <div class="map-legend">
             <span><i class="legend-dot start-legend"></i> Start</span>
             <span><i class="legend-dot destination-legend"></i> Destination</span>
-            <span><i class="legend-line fastest-line"></i> Fastest Route (Traffic Avoided)</span>
-            <span><i class="legend-line traffic-line"></i> Route with Traffic</span>
-            <span><i class="legend-hazard">⚠️</i> Choke Point</span>
+            <span><i class="legend-line fastest-line"></i> Fastest available route</span>
+            <span><i class="legend-line traffic-line"></i> Live traffic section</span>
             <span><i class="legend-hazard">🌧</i> Static rain-risk area</span>
             <span class="map-source">Map data © OpenStreetMap contributors</span>
           </div>
@@ -145,13 +135,13 @@
             <p id="trafficBannerText">Heavy traffic detected on primary corridor. An alternate route was automatically generated.</p>
           </div>
         </div>
-        <p class="estimate-disclaimer">Route times come from OpenStreetMap-based routing. Traffic and monsoon cautions are modeled estimates, not live sensor data.</p>
+        <p id="estimateDisclaimer" class="estimate-disclaimer">Live traffic-aware route times are loaded automatically when the traffic provider is configured.</p>
 
         <!-- Dual Route Cards -->
         <div class="dual-routes-container" id="dualRoutesContainer">
           <div class="dual-route-card active" id="cardFastestRoute" role="button" tabindex="0">
             <div class="route-card-top">
-              <span class="route-badge badge-fastest">⚡ FASTEST (TRAFFIC AVOIDED)</span>
+              <span class="route-badge badge-fastest" id="fastestRouteLabel">⚡ FASTEST WITH LIVE TRAFFIC</span>
               <span class="route-time-saved" id="fastestTimeSaved">Saves — min</span>
             </div>
             <div class="route-card-main">
@@ -159,13 +149,13 @@
               <span class="route-card-dist" id="fastestDistance">—</span>
             </div>
             <div class="route-card-status status-clear" id="fastestStatus">
-              <span class="status-indicator"></span> Clear road · Click to view
+              <span class="status-indicator"></span> Live route · Click to view
             </div>
           </div>
 
           <div class="dual-route-card" id="cardTrafficRoute" role="button" tabindex="0">
             <div class="route-card-top">
-              <span class="route-badge badge-traffic">⚠️ ROUTE WITH TRAFFIC</span>
+              <span class="route-badge badge-traffic" id="trafficRouteLabel">LIVE TRAFFIC ALTERNATIVE</span>
               <span class="route-delay-badge" id="trafficDelayBadge">+— min delay</span>
             </div>
             <div class="route-card-main">
@@ -173,7 +163,7 @@
               <span class="route-card-dist" id="trafficDistance">—</span>
             </div>
             <div class="route-card-status status-congested" id="trafficStatus">
-              <span class="status-indicator"></span> Choke points detected · Click to view
+              <span class="status-indicator"></span> Traffic-adjusted ETA · Click to view
             </div>
           </div>
         </div>
@@ -182,7 +172,7 @@
           <div class="route-summary-card">
             <div class="route-summary-head"><div><h2 id="summaryTitle">Route overview</h2><p id="summarySubtitle">Selected road path</p></div><span class="route-symbol">↗</span></div>
             <div class="metrics"><div class="metric"><span class="metric-value" id="distanceValue">—</span><span class="metric-label">DISTANCE</span></div><div class="metric-divider"></div><div class="metric"><span class="metric-value" id="durationValue">—</span><span class="metric-label">EST. DRIVE</span></div></div>
-            <div class="efficiency-strip"><div><strong id="averageSpeedValue">—</strong><span>EST. AVG SPEED</span></div><div><strong id="delayShareValue">—</strong><span>MODELED DELAY</span></div><div><strong id="stopsValue">—</strong><span>INTERMEDIATE STOPS</span></div></div>
+            <div class="efficiency-strip"><div><strong id="averageSpeedValue">—</strong><span>AVG SPEED</span></div><div><strong id="delayShareValue">—</strong><span>LIVE TRAFFIC DELAY</span></div><div><strong id="stopsValue">—</strong><span>INTERMEDIATE STOPS</span></div></div>
             <div class="trip-points"><div><i class="mini-dot a-dot"></i><span id="summaryStart">Start</span></div><div><i class="mini-dot b-dot"></i><span id="summaryDestination">Destination</span></div></div>
           </div>
           <div class="algorithm-card">
@@ -214,11 +204,6 @@
             <div class="explored-count"><strong id="exploredCount">0</strong><span>nodes explored</span></div>
             <p id="visualizerMessage" class="muted-note">Choose a route to load its sampled graph search.</p>
           </section>
-          <section class="insight-card elevation-card">
-            <div class="algorithm-header"><div><span class="section-kicker">TERRAIN PROFILE</span><h2>Elevation along the route</h2></div><span class="algorithm-icon">⌁</span></div>
-            <canvas id="elevationChart" aria-label="Terrain elevation profile" role="img"></canvas>
-            <p id="elevationNotice" class="muted-note">Terrain elevation is approximate and may differ from road-surface height.</p>
-          </section>
           <section class="insight-card metro-card">
             <div class="algorithm-header"><div><span class="section-kicker">PUBLIC TRANSIT</span><h2>Metro comparison</h2></div><span class="algorithm-icon">▤</span></div>
             <div id="metroEstimate" class="metro-estimate"><span class="muted-note">Choose a route to compare an illustrative Namma Metro estimate.</span></div>
@@ -232,7 +217,6 @@
 
     <div id="toast" class="toast" role="alert" aria-live="assertive" hidden></div>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.8/dist/chart.umd.min.js" defer></script>
     <script src="/static/app.js" defer></script>
   </body>
 </html>

@@ -6,7 +6,6 @@
     waypoints: [],
     target: "start",
     optimize: "time",
-    traffic: "normal",
     avoidFlood: false,
     activeRouteType: "fastest",
     fastestRoute: null,
@@ -14,13 +13,12 @@
     markers: {},
     fastestLayer: null,
     trafficLayer: null,
-    hotspotMarkers: [],
     rainMarkers: [],
+    trafficSectionsLayer: L.layerGroup(),
     searchLayers: L.layerGroup(),
     algorithmResults: [],
     explorationLayers: L.layerGroup(),
     explorationTimer: null,
-    elevationChart: null,
     lastRouteData: null,
     toastTimer: null,
     searchSequence: 0,
@@ -30,6 +28,7 @@
   const map = L.map("map", { zoomControl: false, scrollWheelZoom: true }).setView(BENGALURU, 12);
   state.searchLayers.addTo(map);
   state.explorationLayers.addTo(map);
+  state.trafficSectionsLayer.addTo(map);
   L.control.zoom({ position: "bottomright" }).addTo(map);
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     maxZoom: 19,
@@ -271,15 +270,6 @@
     });
   }));
 
-  document.querySelectorAll("[data-traffic]").forEach((button) => button.addEventListener("click", () => {
-    state.traffic = button.dataset.traffic;
-    document.querySelectorAll("[data-traffic]").forEach((item) => {
-      const active = item === button;
-      item.classList.toggle("active", active);
-      item.setAttribute("aria-pressed", String(active));
-    });
-  }));
-
   document.querySelectorAll("[data-clear]").forEach((button) => button.addEventListener("click", () => {
     const key = button.dataset.clear;
     state[key] = null;
@@ -346,163 +336,166 @@
     });
   }
 
-  function selectActiveRoute(type) {
-    state.activeRouteType = type;
-    const isFastest = type === "fastest";
-    const selected = isFastest ? state.fastestRoute : state.trafficRoute;
-    if (!selected) return;
-
-    // Update card styling
-    $("cardFastestRoute").classList.toggle("active", isFastest);
-    $("cardTrafficRoute").classList.toggle("active", !isFastest);
-
-    // Update layers emphasis
-    if (state.fastestLayer && state.trafficLayer) {
-      if (isFastest) {
-        state.fastestLayer.setStyle({ weight: 6, opacity: 0.95, dashArray: null });
-        state.trafficLayer.setStyle({ weight: 4, opacity: 0.65, dashArray: "6, 6" });
-        state.fastestLayer.bringToFront();
-      } else {
-        state.trafficLayer.setStyle({ weight: 6, opacity: 0.95, dashArray: null });
-        state.fastestLayer.setStyle({ weight: 4, opacity: 0.65, dashArray: "6, 6" });
-        state.trafficLayer.bringToFront();
+  function drawTrafficSections(route) {
+    state.trafficSectionsLayer.clearLayers();
+    if (!route?.traffic_segments?.length) return;
+    const colors = { minor: "#f4b400", moderate: "#f28c28", heavy: "#e34b32", severe: "#c62828" };
+    route.traffic_segments.forEach((segment) => {
+      if (!Array.isArray(segment.coordinates) || segment.coordinates.length < 2) return;
+      const severity = String(segment.severity || "unknown").toLowerCase();
+      const line = L.polyline(segment.coordinates, {
+        color: colors[severity] || "#e34b32",
+        weight: 8,
+        opacity: .96,
+        lineCap: "round",
+        lineJoin: "round",
+      }).addTo(state.trafficSectionsLayer);
+      const tooltip = document.createElement("div");
+      const title = document.createElement("strong");
+      title.textContent = `${severity === "unknown" ? "Traffic" : `${severity[0].toUpperCase()}${severity.slice(1)} traffic`}${segment.category ? ` · ${segment.category.replaceAll("_", " ").toLowerCase()}` : ""}`;
+      tooltip.append(title);
+      if (Number(segment.delay_min) > 0) {
+        const delay = document.createElement("div");
+        delay.textContent = `About +${Math.round(segment.delay_min)} min delay`;
+        tooltip.append(delay);
       }
-    }
+      if (segment.name) {
+        const road = document.createElement("div");
+        road.textContent = segment.name;
+        tooltip.append(road);
+      }
+      line.bindTooltip(tooltip, { sticky: true });
+    });
+  }
 
-    // Update summary metrics
-    $("summaryTitle").textContent = selected.label || (isFastest ? "Fastest Route" : "Route with Traffic");
-    $("summarySubtitle").textContent = isFastest
-      ? "Optimal traffic-avoidance path · OSRM"
-      : "Standard corridor · includes bottleneck delays";
+  function selectActiveRoute(type) {
+    const selected = type === "traffic" && state.trafficRoute ? state.trafficRoute : state.fastestRoute;
+    if (!selected) return;
+    state.activeRouteType = selected === state.trafficRoute ? "traffic" : "fastest";
+    $("cardFastestRoute").classList.toggle("active", state.activeRouteType === "fastest");
+    $("cardTrafficRoute").classList.toggle("active", state.activeRouteType === "traffic");
+
+    if (state.fastestLayer) {
+      state.fastestLayer.setStyle({ weight: state.activeRouteType === "fastest" ? 6 : 4, opacity: state.activeRouteType === "fastest" ? .96 : .55 });
+    }
+    if (state.trafficLayer) {
+      state.trafficLayer.setStyle({ weight: state.activeRouteType === "traffic" ? 6 : 4, opacity: state.activeRouteType === "traffic" ? .96 : .55, dashArray: state.activeRouteType === "traffic" ? null : "7 7" });
+    }
+    (state.activeRouteType === "traffic" ? state.trafficLayer : state.fastestLayer)?.bringToFront();
+    drawTrafficSections(selected);
+
+    const live = selected.provider === "TomTom";
+    $("summaryTitle").textContent = selected.label || (live ? "Fastest with live traffic" : "Road route estimate");
+    $("summarySubtitle").textContent = live
+      ? `TomTom live traffic · updated ${formatTrafficTime(state.liveTraffic?.updated_at)}`
+      : "OSRM route estimate · live traffic unavailable";
     $("distanceValue").textContent = formatDistance(selected.distance_km);
     $("durationValue").textContent = formatDuration(selected.duration_min);
-    const averageSpeed = selected.duration_min > 0
-      ? (selected.distance_km / selected.duration_min * 60).toFixed(1)
-      : "—";
-    const delayShare = selected.duration_min > 0
-      ? `${Math.round((selected.traffic_delay_min || 0) / selected.duration_min * 100)}%`
-      : "—";
+    const averageSpeed = selected.duration_min > 0 ? (selected.distance_km / selected.duration_min * 60).toFixed(1) : "—";
     $("averageSpeedValue").textContent = `${averageSpeed} km/h`;
-    $("delayShareValue").textContent = delayShare;
+    $("delayShareValue").textContent = selected.traffic_delay_min === null || selected.traffic_delay_min === undefined
+      ? "Unavailable"
+      : selected.traffic_delay_min > 0 ? `+${Math.round(selected.traffic_delay_min)} min` : "None detected";
     $("stopsValue").textContent = String(state.waypoints.length);
     renderDirections(selected.instructions || []);
     updateGoogleMapsLink();
-    void loadElevation(selected);
     void loadMetroEstimate();
   }
 
   $("cardFastestRoute").addEventListener("click", () => selectActiveRoute("fastest"));
   $("cardTrafficRoute").addEventListener("click", () => selectActiveRoute("traffic"));
 
+  function formatTrafficTime(value) {
+    if (!value) return "just now";
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? "just now" : date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  }
+
   function renderBothRoutes(data) {
     state.lastRouteData = data;
-    state.fastestRoute = data.fastest_route || data.route;
-    state.trafficRoute = data.traffic_route || data.route;
-    const hotspots = data.traffic_hotspots || [];
+    state.liveTraffic = data.live_traffic || { available: false, configured: false, message: "Live traffic is unavailable." };
+    const routes = Array.isArray(data.routes) && data.routes.length ? data.routes : [data.route || data.fastest_route].filter(Boolean);
+    state.fastestRoute = routes[0] || null;
+    state.trafficRoute = routes[1] || null;
 
-    // Clear previous polylines & markers
     if (state.fastestLayer) map.removeLayer(state.fastestLayer);
     if (state.trafficLayer) map.removeLayer(state.trafficLayer);
-    state.hotspotMarkers.forEach((m) => map.removeLayer(m));
-    state.hotspotMarkers = [];
-    state.rainMarkers.forEach((m) => map.removeLayer(m));
+    state.trafficSectionsLayer.clearLayers();
+    state.rainMarkers.forEach((marker) => map.removeLayer(marker));
     state.rainMarkers = [];
     state.explorationLayers.clearLayers();
 
-    // 1. Draw Traffic Route polyline (Red/Amber)
-    state.trafficLayer = L.polyline(state.trafficRoute.coordinates, {
-      color: "#dc2626",
-      weight: 4,
-      opacity: 0.65,
-      dashArray: "6, 6",
-      lineCap: "round",
-      lineJoin: "round",
-    }).addTo(map).bindTooltip("⚠️ Route with Traffic", { sticky: true });
+    $("cardTrafficRoute").hidden = !state.trafficRoute;
+    $("dualRoutesContainer").classList.toggle("single-route", !state.trafficRoute);
+    const isLive = state.liveTraffic.available === true;
+    document.querySelector(".service-status").lastChild.textContent = isLive
+      ? " Live traffic · TomTom"
+      : " Road routes · live traffic unavailable";
+    $("fastestRouteLabel").textContent = isLive ? "⚡ FASTEST WITH LIVE TRAFFIC" : "ROAD ROUTE ESTIMATE";
+    $("trafficRouteLabel").textContent = isLive ? "LIVE TRAFFIC ALTERNATIVE" : "ALTERNATIVE ROAD ROUTE";
+    $("fastestTimeSaved").textContent = isLive ? "Recommended" : "No live feed";
+    $("fastestStatus").className = `route-card-status ${isLive ? "status-clear" : "status-neutral"}`;
+    $("fastestStatus").lastChild.textContent = isLive ? " Live traffic · click to view" : " Live traffic unavailable · click to view";
+    if (state.trafficRoute) {
+      $("trafficDuration").textContent = formatDuration(state.trafficRoute.duration_min);
+      $("trafficDistance").textContent = formatDistance(state.trafficRoute.distance_km);
+      $("trafficDelayBadge").textContent = isLive && state.trafficRoute.traffic_delay_min > 0
+        ? `+${Math.round(state.trafficRoute.traffic_delay_min)} min delay`
+        : isLive ? "Live ETA" : "No live data";
+      $("trafficStatus").className = `route-card-status ${isLive ? "status-congested" : "status-neutral"}`;
+      $("trafficStatus").lastChild.textContent = isLive ? " Traffic-adjusted ETA · click to view" : " OSRM estimate · click to view";
+    }
+    if (state.fastestRoute) {
+      $("fastestDuration").textContent = formatDuration(state.fastestRoute.duration_min);
+      $("fastestDistance").textContent = formatDistance(state.fastestRoute.distance_km);
+    }
 
-    // 2. Draw Fastest Route polyline (Emerald Green)
-    state.fastestLayer = L.polyline(state.fastestRoute.coordinates, {
-      color: "#059669",
-      weight: 6,
-      opacity: 0.95,
-      lineCap: "round",
-      lineJoin: "round",
-    }).addTo(map).bindTooltip("⚡ Fastest Route (Traffic Avoided)", { sticky: true });
-
-    // 3. Add bottleneck hazard markers
-    hotspots.forEach((spot) => {
-      const hazardIcon = L.divIcon({
-        className: "",
-        html: `<div class="traffic-marker" title="${spot.name}"><span>⚠️</span></div>`,
-        iconSize: [26, 26],
-        iconAnchor: [13, 13],
-      });
-      const marker = L.marker([spot.lat, spot.lon], { icon: hazardIcon })
-        .addTo(map)
-        .bindPopup(`<strong>⚠️ ${spot.name}</strong><br><small>${spot.description}</small><br><strong>Severity:</strong> ${spot.severity.toUpperCase()}<br><strong>Est. Delay:</strong> ~${spot.delay_min || 0} min`);
-      state.hotspotMarkers.push(marker);
-    });
+    if (state.trafficRoute) {
+      state.trafficLayer = L.polyline(state.trafficRoute.coordinates, {
+        color: "#d97706", weight: 4, opacity: .68, dashArray: "7 7", lineCap: "round", lineJoin: "round",
+      }).addTo(map).bindTooltip(state.liveTraffic.available ? "Live traffic-aware alternative" : "Alternative OSRM road route", { sticky: true });
+    }
+    if (state.fastestRoute) {
+      state.fastestLayer = L.polyline(state.fastestRoute.coordinates, {
+        color: "#059669", weight: 6, opacity: .96, lineCap: "round", lineJoin: "round",
+      }).addTo(map).bindTooltip(state.liveTraffic.available ? "Fastest route with current traffic" : "OSRM road route estimate", { sticky: true });
+    }
     (data.rain_risks || []).forEach((risk) => {
-      const rainIcon = L.divIcon({
-        className: "",
-        html: '<div class="rain-marker" aria-hidden="true">🌧</div>',
-        iconSize: [28, 28],
-        iconAnchor: [14, 14],
-      });
-      const marker = L.marker([risk.lat, risk.lon], { icon: rainIcon })
-        .addTo(map)
+      const icon = L.divIcon({ className: "", html: '<div class="rain-marker" aria-hidden="true">🌧</div>', iconSize: [28, 28], iconAnchor: [14, 14] });
+      const marker = L.marker([risk.lat, risk.lon], { icon }).addTo(map)
         .bindPopup(`<strong>Static rain-risk caution: ${risk.name}</strong><br><small>${risk.description}</small>`);
       state.rainMarkers.push(marker);
     });
 
-    // Fit bounds to show both routes
-    const combinedCoords = [...state.fastestRoute.coordinates, ...state.trafficRoute.coordinates];
-    if (combinedCoords.length) {
-      map.fitBounds(L.latLngBounds(combinedCoords).pad(0.18), { maxZoom: 15, animate: true });
-    }
+    const combinedCoords = routes.flatMap((route) => route.coordinates || []);
+    if (combinedCoords.length) map.fitBounds(L.latLngBounds(combinedCoords).pad(.18), { maxZoom: 15, animate: true });
 
-    // 4. Update Traffic Alert Banner
     const banner = $("trafficBanner");
-    const bannerTitle = $("trafficBannerTitle");
-    const bannerText = $("trafficBannerText");
-    if (data.has_traffic_reroute) {
-      banner.hidden = false;
-      bannerTitle.textContent = "⚡ Recommended alternative found";
-      bannerText.textContent = data.reroute_reason;
-    } else if (state.trafficRoute.traffic_delay_min > 0) {
-      banner.hidden = false;
-      bannerTitle.textContent = "⚠️ Modeled congestion on this corridor";
-      bannerText.textContent = `The hotspot model estimates about +${state.trafficRoute.traffic_delay_min.toFixed(0)} min on the selected corridor.`;
+    banner.hidden = false;
+    if (isLive) {
+      const segmentCount = state.fastestRoute?.traffic_segments?.length || 0;
+      const delay = Number(state.fastestRoute?.traffic_delay_min || 0);
+      $("trafficBannerTitle").textContent = `Live traffic · updated ${formatTrafficTime(state.liveTraffic.updated_at)}`;
+      $("trafficBannerText").textContent = segmentCount
+        ? `${segmentCount} traffic-affected road section${segmentCount === 1 ? "" : "s"} shown on the map. Current route delay: ${Math.round(delay)} min.`
+        : delay > 0
+          ? `TomTom reports about ${Math.round(delay)} min of traffic delay, but did not map a specific affected section.`
+          : "No traffic-affected sections were reported on this route at the time of the request.";
     } else {
-      banner.hidden = false;
-      bannerTitle.textContent = "✓ Route estimate ready";
-      bannerText.textContent = "No significant delay was found by the configured hotspot model.";
+      $("trafficBannerTitle").textContent = state.liveTraffic.configured ? "Live traffic temporarily unavailable" : "Live traffic needs a free API key";
+      $("trafficBannerText").textContent = state.liveTraffic.message || "Showing an OSRM route estimate without live traffic adjustment.";
     }
-
-    // 5. Update Dual Route Cards
-    $("fastestDuration").textContent = formatDuration(state.fastestRoute.duration_min);
-    $("fastestDistance").textContent = formatDistance(state.fastestRoute.distance_km);
-    $("fastestTimeSaved").textContent = data.has_traffic_reroute
-      ? `Saves ${Math.round(data.time_saved_min)} min`
-      : "Optimal route";
-
-    $("trafficDuration").textContent = formatDuration(state.trafficRoute.duration_min);
-    $("trafficDistance").textContent = formatDistance(state.trafficRoute.distance_km);
-    $("trafficDelayBadge").textContent = state.trafficRoute.traffic_delay_min > 0
-      ? `+${Math.round(state.trafficRoute.traffic_delay_min)} min delay`
-      : "Standard path";
-
-    $("cardTrafficRoute").classList.toggle("is-congested", state.trafficRoute.traffic_delay_min > 0);
+    $("estimateDisclaimer").textContent = data.estimate_notice || state.liveTraffic.message;
 
     $("summaryStart").textContent = data.start.label;
     $("summaryDestination").textContent = data.destination.label;
-
     selectActiveRoute("fastest");
     renderAlgorithms(data.algorithm_comparison || {});
-
     $("results").hidden = false;
     updateGoogleMapsLink();
-    void loadElevation(state.fastestRoute);
+    if (state.avoidFlood) void showStaticRainHazards(true);
     void loadMetroEstimate();
+
     if (window.matchMedia("(max-width: 740px)").matches) {
       const panel = document.querySelector(".planner-panel");
       panel.dataset.sheetState = "peek";
@@ -527,8 +520,6 @@
           destination: state.destination,
           waypoints: state.waypoints,
           optimize_for: state.optimize,
-          traffic_mode: state.traffic,
-          avoid_flood: state.avoidFlood,
         }),
       });
       hideNotice();
@@ -567,7 +558,6 @@
     if (state.start) url.searchParams.set("start", `${state.start.lat},${state.start.lon}`);
     if (state.destination) url.searchParams.set("dest", `${state.destination.lat},${state.destination.lon}`);
     state.waypoints.filter(Boolean).forEach((point) => url.searchParams.append("via", `${point.lat},${point.lon}`));
-    url.searchParams.set("traffic", state.traffic);
     if (state.avoidFlood) url.searchParams.set("rain", "1");
     return url.toString();
   }
@@ -577,58 +567,6 @@
     if (parts.length !== 2 || !Number.isFinite(parts[0]) || !Number.isFinite(parts[1])) return null;
     if (parts[0] < -90 || parts[0] > 90 || parts[1] < -180 || parts[1] > 180) return null;
     return { lat: parts[0], lon: parts[1], label };
-  }
-
-  async function loadElevation(route) {
-    const canvas = $("elevationChart");
-    if (!route?.coordinates?.length || !window.Chart) {
-      $("elevationNotice").textContent = "Elevation chart is unavailable right now.";
-      return;
-    }
-    const coords = route.coordinates;
-    const sampleCount = Math.min(28, coords.length);
-    const sampled = Array.from({ length: sampleCount }, (_, index) => coords[
-      Math.round(index * (coords.length - 1) / Math.max(1, sampleCount - 1))
-    ]);
-    $("elevationNotice").textContent = "Loading approximate terrain elevations…";
-    try {
-      const result = await api("/api/elevation", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          coordinates: sampled.map(([lat, lon], index) => ({ lat, lon, label: `Point ${index + 1}` })),
-        }),
-      });
-      const profile = result.profile || [];
-      if (state.elevationChart) state.elevationChart.destroy();
-      state.elevationChart = new Chart(canvas, {
-        type: "line",
-        data: {
-          labels: profile.map((point) => `${point.distance_km.toFixed(1)} km`),
-          datasets: [{
-            data: profile.map((point) => point.elevation_m),
-            borderColor: "#178879",
-            backgroundColor: "rgba(23,136,121,.12)",
-            fill: true,
-            tension: .35,
-            pointRadius: 0,
-            borderWidth: 2,
-          }],
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          plugins: { legend: { display: false }, tooltip: { displayColors: false } },
-          scales: {
-            x: { grid: { display: false }, ticks: { maxTicksLimit: 5, color: "#87948e", font: { size: 9 } } },
-            y: { grid: { color: "#edf1ee" }, ticks: { maxTicksLimit: 4, color: "#87948e", font: { size: 9 } } },
-          },
-        },
-      });
-      $("elevationNotice").textContent = result.estimate_notice;
-    } catch (error) {
-      $("elevationNotice").textContent = error.message || "Terrain profile is temporarily unavailable.";
-    }
   }
 
   async function loadMetroEstimate() {
@@ -777,7 +715,7 @@
       const result = await api("/api/route/optimize-order", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ points, traffic_mode: state.traffic }),
+        body: JSON.stringify({ points }),
       });
       state.start = result.points[0];
       state.destination = result.points[result.points.length - 1];
@@ -862,15 +800,9 @@
     const start = parsePoint(params.get("start"), "Shared start");
     const destination = parsePoint(params.get("dest"), "Shared destination");
     if (!start || !destination) return;
-    state.traffic = ["normal", "peak", "offpeak"].includes(params.get("traffic")) ? params.get("traffic") : "normal";
     state.avoidFlood = params.get("rain") === "1";
     $("avoidFloodToggle").checked = state.avoidFlood;
     if (state.avoidFlood) void showStaticRainHazards(true);
-    document.querySelectorAll("[data-traffic]").forEach((button) => {
-      const active = button.dataset.traffic === state.traffic;
-      button.classList.toggle("active", active);
-      button.setAttribute("aria-pressed", String(active));
-    });
     state.waypoints = params.getAll("via").slice(0, 8).map((value, index) => parsePoint(value, `Shared stop ${index + 1}`)).filter(Boolean);
     addPoint("start", start);
     state.waypoints.forEach((point, index) => { markerFor(`stop-${index}`, point); });
@@ -881,9 +813,11 @@
 
   updatePlanner();
   setTarget("start");
-  fetch("/health").then((response) => response.ok ? response.json() : null).then((health) => {
-    if (health) {
-      document.querySelector(".service-status").lastChild.textContent = " Road routes · modeled traffic";
-    }
-  }).catch(() => {});
+  api("/api/traffic/status").then((status) => {
+    document.querySelector(".service-status").lastChild.textContent = status.available
+      ? " TomTom traffic ready · automatic"
+      : " Road routes · live traffic key needed";
+  }).catch(() => {
+    document.querySelector(".service-status").lastChild.textContent = " Road routes · traffic status unavailable";
+  });
 })();
